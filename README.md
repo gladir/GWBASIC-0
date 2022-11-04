@@ -7,11 +7,11 @@ Clone GWBASIC du DOS écrit en Pascal
 	
 Les fichiers Pascal n'ont aucune dépendances, il suffit de télécharger le fichier désiré et de le compiler avec Free Pascal avec la syntaxe de commande  :
 
-<pre><b>fpc</b> FDISK.PAS</pre>
+<pre><b>fpc</b> GWBASIC.PAS</pre>
 	
 Sinon, vous pouvez également le compiler avec le Turbo Pascal à l'aide de la syntaxe de commande suivante :	
 
-<pre><b>tpc</b> FDISK.PAS</pre>
+<pre><b>tpc</b> GWBASIC.PAS</pre>
 	
 <h2>Licence</h2>
 <ul>
