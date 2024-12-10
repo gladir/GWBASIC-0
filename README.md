@@ -3,6 +3,18 @@ Clone GWBASIC du DOS écrit en Pascal
 
 ![image](https://github.com/user-attachments/assets/75df72ff-a337-4f71-9678-99eeea4c16b6)
 
+<h2>Quoi de neuf</h2>
+
+<h4>Version 0.70</h4>
+<ul>
+  <li>Ajout du paramètre --version.</li>
+  <li>Ajout du support du chargement du format compressé du GW-BASIC (encodage avec jetons).</li>
+  <li>Ajout du support de la suppression d'une ligne de code source en tapant son numéro.</li>
+  <li>Ajout des commandes SCREEN, CIRCLE et LINE.</li>
+  <li>Amélioration des paramètres de la commande LIST et LLIST pour supporter les intervalles.</li>
+</ul>
+
+
 <h2>Compilation</h2>
 	
 Les fichiers Pascal n'ont aucune dépendances, il suffit de télécharger le fichier désiré et de le compiler avec Free Pascal avec la syntaxe de commande  :
