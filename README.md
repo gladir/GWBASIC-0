@@ -1,7 +1,7 @@
 # GWBASIC-0
 Clone GWBASIC du DOS écrit en Pascal
 
-![image](https://user-images.githubusercontent.com/11842176/200001647-84d7325f-7fef-40f8-89a9-c584d02914a3.png)
+![image](https://github.com/user-attachments/assets/75df72ff-a337-4f71-9678-99eeea4c16b6)
 
 <h2>Compilation</h2>
 	
