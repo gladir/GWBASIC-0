@@ -5,6 +5,16 @@ Clone GWBASIC du DOS écrit en Pascal
 
 <h2>Quoi de neuf</h2>
 
+<h4>Version 0.71</h4>
+<ul>
+  <li>Ajout du support de la commande AUTO avec son arrêt par Ctrl+C.</li>
+  <li>Ajout du support de la commande KILL et NAME.</li>
+  <li>Ajout du support de la commande LPRINT.</li>
+  <li>Ajout du support de la commande CLEAR.</li>
+  <li>Fixe le bogue n'effacant pas les anciennes variables lorsqu'il lance la commande RUN.</li>
+  <li>Fixe le bogue qu'il perd l'affichage des touches de fonctions lors de l'utilisation de la commande CLS.</li>
+</ul>
+
 <h4>Version 0.70</h4>
 <ul>
   <li>Ajout du paramètre --version.</li>
