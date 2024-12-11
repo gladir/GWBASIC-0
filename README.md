@@ -1,5 +1,5 @@
 # GWBASIC-0
-Clone GWBASIC du DOS écrit en Pascal
+Clone GWBASIC du DOS écrit en Pascal  (Turbo Pascal ou Free Pascal).
 
 ![image](https://github.com/user-attachments/assets/75df72ff-a337-4f71-9678-99eeea4c16b6)
 
