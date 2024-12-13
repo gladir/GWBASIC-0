@@ -5,6 +5,15 @@ Clone GWBASIC du DOS écrit en Pascal  (Turbo Pascal ou Free Pascal).
 
 <h2>Quoi de neuf</h2>
 
+<h4>Version 0.72</h4>
+<ul>
+  <li>Ajout du support de la commande DRAW.</li>
+  <li>Ajout du support de l'opérateur d'exposant.</li>
+  <li>Fixe le bogue effectant une variable LongInt plutôt qu'une variable réel, lorsque le nombre est à virgule flottante.</li>
+  <li>Fixe le bogue que le ne change pas de type de données les variantes lorsqu'on fixe une nouvelle valeurs.</li>
+  <li>Fixe le bogue des pertes de décimales pour les variables # et !.</li>
+</ul>
+
 <h4>Version 0.71</h4>
 <ul>
   <li>Ajout du support de la commande AUTO avec son arrêt par Ctrl+C.</li>
