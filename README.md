@@ -5,6 +5,13 @@ Clone GWBASIC du DOS écrit en Pascal  (Turbo Pascal ou Free Pascal).
 
 <h2>Quoi de neuf</h2>
 
+<h4>Version 0.73</h4>
+<ul>
+  <li>Ajout du support de la commande EDIT.</li>
+  <li>Corrige le bogue pour n'écrasant pas une ligne existante si elle le même numéro.</li>
+  <li>Ajout des raccourcis clavier de Alt+A (AUTO), Alt+B (NEXT), Alt+P (PRINT),...</li>
+</ul>
+
 <h4>Version 0.72</h4>
 <ul>
   <li>Ajout du support de la commande DRAW.</li>
