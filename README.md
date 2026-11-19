@@ -5,6 +5,18 @@ Clone GWBASIC du DOS écrit en Pascal  (Turbo Pascal ou Free Pascal).
 
 <h2>Quoi de neuf</h2>
 
+<h4>Version 0.80</h4>
+<ul>
+  <li>Réécriture de l'évaluateur d'expressions : priorité des opérateurs conforme au GW-BASIC (^, négation, * /, \, MOD, + -, relationnels, NOT, AND, OR, XOR, EQV, IMP), types entier (%), simple (!) et double (#) précision, chaînes.</li>
+  <li>Affichage des nombres identique au GW-BASIC (7 chiffres en simple précision, 16 en double, notation E/D, espace de signe).</li>
+  <li>Correction du IF ... THEN ... ELSE (ELSE imbriqués, numéro de ligne après THEN/ELSE, IF ... GOTO).</li>
+  <li>Support complet de DIM et des tableaux (plusieurs dimensions, dimension implicite de 10, OPTION BASE, ERASE, « Indice hors limites », « Définition en double »).</li>
+  <li>Les lignes sont converties en jetons comme le GW-BASIC (LIST affiche les mots réservés en majuscules).</li>
+  <li>Ajout de FOR/NEXT avec STEP, WHILE/WEND, ON ... GOTO/GOSUB, DATA/READ/RESTORE, INPUT, LINE INPUT, DEF FN, DEFINT/DEFSNG/DEFDBL/DEFSTR, SWAP, MID$ en affectation, ON ERROR GOTO, RESUME, ERROR, ERR, ERL, STOP/CONT, RENUM, DELETE, MERGE, CHAIN, PRINT USING, WRITE, fichiers séquentiels (OPEN, CLOSE, PRINT #, WRITE #, INPUT #, LINE INPUT #, EOF), RANDOMIZE et RND (même suite que le GW-BASIC), PSET, PRESET, PAINT, PLAY, SOUND.</li>
+  <li>Ajout des fonctions manquantes (LEFT$, RIGHT$, MID$, STR$, STRING$, SPACE$, HEX$, OCT$, INSTR, INKEY$, INPUT$, CINT, CSNG, CDBL, SGN, TIMER, DATE$, TIME$, MKI$/CVI, MKS$/CVS, MKD$/CVD, ...).</li>
+  <li>Messages d'erreur numérotés comme ceux du GW-BASIC (ERR) avec le numéro de ligne.</li>
+</ul>
+
 <h4>Version 0.73</h4>
 <ul>
   <li>Ajout du support de la commande EDIT.</li>
@@ -50,6 +62,10 @@ Les fichiers Pascal n'ont aucune dépendances, il suffit de télécharger le fic
 Sinon, vous pouvez également le compiler avec le Turbo Pascal à l'aide de la syntaxe de commande suivante :	
 
 <pre><b>tpc</b> GWBASIC.PAS</pre>
+
+Le code du programme principal tient dans un seul segment de 64 Ko sous Turbo Pascal 7.
+
+Remarque : sous Linux, l'unité PtcGraph de Free Pascal exige que l'unité <b>cthreads</b> soit la première de la clause Uses, sinon le programme s'arrête au démarrage (erreur 211).
 	
 <h2>Licence</h2>
 <ul>
