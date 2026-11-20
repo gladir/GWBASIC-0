@@ -19,7 +19,7 @@ Uses {$IFDEF FPC}
      {$ENDIF};
 
 Const
- Version='0.82';
+ Version='0.83';
  MaxLine=2000;
  MaxFile=15;
  MaxDim=8;
@@ -127,6 +127,8 @@ Const
 Type
  StrPointer=^String;
  PStrPtr=^StrPointer;
+ TStrArr=Array[0..63]of StrPointer;
+ PStrArr=^TStrArr;
  PInt=^Integer;
  PSng=^Single;
  PDbl=^Double;
@@ -247,6 +249,8 @@ Var
  VX1,VY1,VX2,VY2,VOX,VOY,VTop,VBot:Integer;
  WX1,WY1,WX2,WY2:Double;
  CommonStr:String;
+ EnvList:PStrArr;
+ EnvCnt:Integer;
  UsrAddr:Array[0..9]of Word;
  UsrDef:Word;
  VPKey:Array[0..15]of Word;
@@ -1834,6 +1838,26 @@ Begin
  {$ENDIF}
 End;
 
+ { ENVIRON : variables d'environnement d‚finies par le programme }
+Function EnvFind(Const N:String):Integer;
+Var
+ I:Integer;
+Begin
+ EnvFind:=-1;
+ For I:=0 to EnvCnt-1 do
+  If Copy(EnvList^[I]^,1,Length(N)+1)=N+'='Then EnvFind:=I;
+End;
+
+Function EnvGet(N:String):String;
+Var
+ I:Integer;
+Begin
+ N:=StrToUpper(N);
+ I:=EnvFind(N);
+ If I<0 Then EnvGet:=GetEnv(N)
+        Else EnvGet:=Copy(EnvList^[I]^,Length(N)+2,255);
+End;
+
  { valuation des expressions }
 Procedure EvalPrimary;Forward;
 Procedure EvalNeg;Forward;
@@ -2314,7 +2338,7 @@ Begin
    Eval;
    Expect(')');
    If ErrCode=0 Then Begin
-    If VT='$'Then VS:=GetEnv(StrToUpper(VS))
+    If VT='$'Then VS:=EnvGet(VS)
              Else VS:=EnvStr(ToInt);
     VT:='$';
    End;
@@ -6362,6 +6386,22 @@ Begin
    DoEvSet(EvParse(T,False));
   End;
   kLOCK,kUNLOCK,kLCOPY,kPCOPY:SkipStmt;
+  kENVIRON:Begin
+   EvalS;
+   If ErrCode<>0 Then Exit;
+   I:=Pos('=',VS);
+   If(I<2)or(EnvCnt>=64)Then Err(5)
+    Else
+   Begin
+    VS:=StrToUpper(Copy(VS,1,I-1))+Copy(VS,I,255);
+    I:=EnvFind(Copy(VS,1,I-1));
+    If I<0 Then Begin
+     I:=EnvCnt;
+     Inc(EnvCnt);
+    End;
+    SetStrP(@EnvList^[I],VS);
+   End;
+  End;
   kIOCTL:Begin
    Accept('#');
    CheckFile(EvalI,' ');
@@ -6580,6 +6620,9 @@ BEGIN
   VBot:=24;
   TimerInt:=1;
   FieldList:=NIL;
+  EnvList:=Alloc(64*SizeOf(StrPointer));
+  FillChar(EnvList^,64*SizeOf(StrPointer),0);
+  EnvCnt:=0;
   InGraph:=False;
   Tron:=False;
   KeyFunction:=True;
