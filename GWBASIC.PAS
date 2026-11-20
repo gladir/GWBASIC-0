@@ -5,8 +5,8 @@
 }
 
 {$IFNDEF FPC}
- {$N+,E+}
- {$M 16384,0,393216}
+ {$N+,E+,S-}
+ {$M 32768,0,393216}
 {$ENDIF}
 {$R-,B-,V-}
 
@@ -19,7 +19,7 @@ Uses {$IFDEF FPC}
      {$ENDIF};
 
 Const
- Version='0.80';
+ Version='0.81';
  MaxLine=2000;
  MaxFile=15;
  MaxDim=8;
@@ -46,7 +46,7 @@ Const
   'FN','SPC(','NOT','ERL','ERR','STRING$','USING','INSTR','','VARPTR',
   'CSRLIN','POINT','OFF','INKEY$','','','','','','',
   '','','','','','','','','','AND',
-  'OR','XOR','EQV','IMP','MOD','','HELP','SLEEP','','',
+  'OR','XOR','EQV','IMP','MOD','','HELP','SLEEP','CAT','CLR',
   '','','','','','','','LEFT$','RIGHT$','MID$',
   'SGN','INT','ABS','SQR','RND','SIN','LOG','EXP','COS','TAN',
   'ATN','FRE','INP','POS','LEN','STR$','VAL','ASC','CHR$','PEEK',
@@ -73,7 +73,10 @@ Const
  kHEX=153;kCVI=205;kMKI=208;kFILES=165;kSYSTEM=167;kNAME=168;kKILL=171;
  kRESET=174;kCOMMON=175;kCHAIN=176;kDATE=177;kTIME=178;kPAINT=179;kCIRCLE=181;
  kDRAW=182;kPLAY=183;kTIMER=184;kIOCTL=186;kCHDIR=187;kMKDIR=188;kRMDIR=189;
- kSHELL=190;kENVIRON=191;kERDEV=185;
+ kSHELL=190;kENVIRON=191;kERDEV=185;kCAT=119;kCLR=120;kCALL=51;kBLOAD=67;
+ kCOM=180;kPEN=159;kSTRIG=161;kFIELD=166;kLSET=169;kRSET=170;kPUT=172;kGET=173;
+ kVIEW=192;kWINDOW=193;kPMAP=194;kPALETTE=195;kLCOPY=196;kCALLS=197;kPCOPY=201;
+ kLOCK=203;kUNLOCK=204;
 
   { Messages d'erreur (num‚ros identiques … ceux du GW-BASIC) }
  ErrMsg:Array[1..76]of String[38]=(
@@ -152,7 +155,19 @@ Type
  End;
  GosubRec=Record
   LP,Pos,FSP,WSP:Integer;
+  Jmp:Boolean;
+  Ev:Byte;
  End;
+ PField=^TField;
+ TField=Record
+  Next:PField;
+  F:Byte;
+  Ofs,Len:Word;
+  P:PStrPtr;
+ End;
+ {$IFDEF FPC}
+  TVMem=Array[0..65535]of Byte;
+ {$ENDIF}
  WhileRec=Record
   LP,Pos:Integer;
  End;
@@ -178,7 +193,7 @@ Var
  ArrList:PArr;
  FnList:PFn;
  DefT:Array['A'..'Z']of Char;
- OptBase,FnDepth:Integer;
+ OptBase,FnDepth,EvDepth:Integer;
  ForStk:Array[1..MaxFor]of ForRec;
  GosubStk:Array[1..MaxGosub]of GosubRec;
  WhileStk:Array[1..MaxWhile]of WhileRec;
@@ -201,6 +216,24 @@ Var
  DefSeg:Word;
  PollCnt:Byte;
  POct,PLen,PTempo,PStyle:Integer;
+ FR:Array[1..MaxFile]of File;
+ FBuf:Array[1..MaxFile]of PByteArr;
+ FLen:Array[1..MaxFile]of Word;
+ FRec,FCnt:Array[1..MaxFile]of LongInt;
+ FREof:Array[1..MaxFile]of Boolean;
+ FNm:Array[1..MaxFile]of StrPointer;
+ FieldList:PField;
+ EvLine:Array[1..29]of Word;
+ EvSt:Array[1..29]of Byte;
+ EvPend:Array[1..29]of Boolean;
+ TimerInt,TimerRef:Double;
+ ViewOn,WinOn,WinScr:Boolean;
+ VX1,VY1,VX2,VY2,VOX,VOY,VTop,VBot:Integer;
+ WX1,WY1,WX2,WY2:Double;
+ CommonStr:String;
+ {$IFDEF FPC}
+  VMem:^TVMem;
+ {$ENDIF}
 
  { Utilitaires }
 Procedure Err(N:Integer);Begin
@@ -722,6 +755,7 @@ Procedure OutS(Const S:String);Begin
    {$I-}Write(FT[OutF],S);{$I+}
    If IoResult<>0 Then Err(57);
    Inc(FCol[OutF],Length(S));
+   Inc(FCnt[OutF],Length(S));
   End;
  End;
 End;
@@ -1189,11 +1223,31 @@ Begin
  End;
 End;
 
+Procedure DropFields(N:Integer;V:Pointer);
+Var
+ P,Q,Prev:PField;
+Begin
+ P:=FieldList;
+ Prev:=NIL;
+ While P<>NIL do Begin
+  Q:=P^.Next;
+  If((N=0)or(P^.F=N))and((V=NIL)or(P^.P=V))Then Begin
+   If Prev=NIL Then FieldList:=Q
+               Else Prev^.Next:=Q;
+   FreeMem(P,SizeOf(TField));
+  End
+   Else
+  Prev:=P;
+  P:=Q;
+ End;
+End;
+
 Procedure ClearVars;
 Var
  V:PVar;
  A:PArr;
 Begin
+ DropFields(0,NIL);
  While VarList<>NIL do Begin
   V:=VarList;
   VarList:=V^.Next;
@@ -1310,11 +1364,23 @@ End;
 Procedure PollKey;
 Var
  C,E:Char;
+ K:Integer;
 Begin
  While KeyPressed do Begin
   C:=ReadKey;
   E:=#0;
-  If C=#0 Then E:=ReadKey;
+  K:=0;
+  If C=#0 Then Begin
+   E:=ReadKey;
+   Case E of
+    #59..#68:K:=Ord(E)-58;
+    #72:K:=11;
+    #75:K:=12;
+    #77:K:=13;
+    #80:K:=14;
+   End;
+  End;
+  If(K>0)and(EvSt[K]>0)Then EvPend[K]:=True Else
   If C=#3 Then BreakFlag:=True Else
   If Length(KeyBuf)<18 Then Begin
    KeyBuf:=KeyBuf+C;
@@ -1342,6 +1408,7 @@ Begin
   FLook[N]:=-1;
   Exit;
  End;
+ Inc(FCnt[N]);
  {$I-}
  If Eof(FT[N])Then C:=#26
               Else Read(FT[N],C);
@@ -1364,9 +1431,54 @@ Function CheckFile(N:Integer;M:Char):Integer;Begin
  If ErrCode<>0 Then Exit;
  If(N<1)or(N>MaxFile)Then Err(52) Else
  If FMode[N]=#0 Then Err(52) Else
- If((M='I')and(FMode[N]<>'I'))or((M='O')and(FMode[N]='I'))Then Err(54)
+ If((M='I')and(FMode[N]<>'I'))or((M='O')and Not(FMode[N]in['O','A']))or
+   ((M='R')and(FMode[N]<>'R'))Then Err(54)
   Else
  CheckFile:=N;
+End;
+
+Function FileLen(N:Integer):LongInt;
+Var
+ F:File;
+Begin
+ FileLen:=0;
+ {$I-}
+ If FMode[N]='R'Then FileLen:=FileSize(FR[N])
+  Else
+ Begin
+  If FMode[N]<>'I'Then Flush(FT[N]);
+  Assign(F,FNm[N]^);
+  Reset(F,1);
+  If IoResult=0 Then Begin
+   FileLen:=FileSize(F);
+   Close(F);
+  End;
+ End;
+ {$I+}
+ If IoResult<>0 Then;
+End;
+
+ { M‚moire (PEEK, POKE, BLOAD, BSAVE) : sous Free Pascal, un segment
+   de 64 Ko simul‚ remplace la m‚moire r‚elle du DOS. }
+Function PeekB(S,A:Word):Byte;Begin
+ {$IFDEF FPC}
+  If VMem=NIL Then PeekB:=0
+              Else PeekB:=VMem^[A];
+ {$ELSE}
+  PeekB:=Mem[S:A];
+ {$ENDIF}
+End;
+
+Procedure PokeB(S,A:Word;B:Byte);Begin
+ {$IFDEF FPC}
+  If VMem=NIL Then Begin
+   New(VMem);
+   FillChar(VMem^,SizeOf(TVMem),0);
+  End;
+  VMem^[A]:=B;
+ {$ELSE}
+  Mem[S:A]:=B;
+ {$ENDIF}
 End;
 
 Function Z2(N:Word):String;Begin
@@ -1454,11 +1566,11 @@ End;
 
  { Graphiques : conversion des coordonn‚es logiques en coordonn‚es physiques }
 Function SXp(X:Integer):Integer;Begin
- SXp:=LongInt(X)*(GetMaxX+1)div GW;
+ SXp:=LongInt(X-VOX)*(GetMaxX+1)div GW;
 End;
 
 Function SYp(Y:Integer):Integer;Begin
- SYp:=LongInt(Y)*(GetMaxY+1)div GH;
+ SYp:=LongInt(Y-VOY)*(GetMaxY+1)div GH;
 End;
 
 Function GColor(C:Integer):Word;Begin
@@ -1473,6 +1585,65 @@ Function GColor(C:Integer):Word;Begin
             Else GColor:=0;
   Else GColor:=C and 15;
  End;
+End;
+
+ { Couleur logique correspondant … une couleur physique }
+Function LogColor(P:Word):Integer;
+Var
+ I:Integer;
+Begin
+ I:=0;
+ While(I<15)and(GColor(I)<>P)do Inc(I);
+ LogColor:=I;
+End;
+
+ { WINDOW : conversion entre coordonn‚es du monde et coordonn‚es logiques }
+Function VWid:Integer;Begin
+ If(ViewOn)Then VWid:=VX2-VX1+1
+           Else VWid:=GW;
+End;
+
+Function VHgt:Integer;Begin
+ If(ViewOn)Then VHgt:=VY2-VY1+1
+           Else VHgt:=GH;
+End;
+
+Function Clip(X:Double):Integer;Begin
+ If X>32000 Then X:=32000;
+ If X<-32000 Then X:=-32000;
+ Clip:=RoundI(X);
+End;
+
+Function MapX(X:Double):Integer;Begin
+ If(WinOn)Then X:=(X-WX1)*(VWid-1)/(WX2-WX1)+VOX;
+ MapX:=Clip(X);
+End;
+
+Function MapY(Y:Double):Integer;Begin
+ If(WinOn)Then Begin
+  If(WinScr)Then Y:=(Y-WY1)*(VHgt-1)/(WY2-WY1)+VOY
+            Else Y:=(WY2-Y)*(VHgt-1)/(WY2-WY1)+VOY;
+ End;
+ MapY:=Clip(Y);
+End;
+
+Function UnX(L:Integer):Double;Begin
+ If(WinOn)Then UnX:=(L-VOX)*(WX2-WX1)/(VWid-1)+WX1
+          Else UnX:=L;
+End;
+
+Function UnY(L:Integer):Double;Begin
+ If Not(WinOn)Then UnY:=L Else
+ If(WinScr)Then UnY:=(L-VOY)*(WY2-WY1)/(VHgt-1)+WY1
+           Else UnY:=WY2-(L-VOY)*(WY2-WY1)/(VHgt-1);
+End;
+
+Function Secs:Double;
+Var
+ H,M,S,S100:Word;
+Begin
+ GetTime(H,M,S,S100);
+ Secs:=H*3600.0+M*60.0+S+S100/100;
 End;
 
  { valuation des expressions }
@@ -1762,7 +1933,10 @@ Begin
 End;
 
 Procedure Eval;Begin
- EvalLog(0);
+ Inc(EvDepth);
+ If EvDepth>30 Then Err(7)
+               Else EvalLog(0);
+ Dec(EvDepth);
 End;
 
  { Appel d'une fonction d‚finie par DEF FN }
@@ -1895,7 +2069,7 @@ Begin
   kERL:Fix(ErrLin,'!');
   kERR:Fix(ErrNum,'%');
   kCSRLIN:If(InGraph)Then Fix(GRow+1,'%')
-                     Else Fix(WhereY,'%');
+                     Else Fix(WhereY+VTop-1,'%');
   kINKEY:Begin
    PollKey;
    VS:='';
@@ -1907,9 +2081,20 @@ Begin
    End;
    VT:='$';
   End;
-  kTIMER:Begin
-   GetTime(H,M,S,S100);
-   Fix(H*3600.0+M*60.0+S+S100/100,'!');
+  kTIMER:Fix(Secs,'!');
+  kPMAP:Begin
+   Expect('(');
+   X:=EvalN;
+   Expect(',');
+   N:=EvalI;
+   Expect(')');
+   If ErrCode=0 Then Case N of
+    0:Fix(MapX(X),'%');
+    1:Fix(MapY(X),'%');
+    2:Fix(UnX(Clip(X)),'!');
+    3:Fix(UnY(Clip(X)),'!');
+    Else Err(5);
+   End;
   End;
   kDATE:Begin
    GetDate(H,M,S,S100);
@@ -2058,23 +2243,26 @@ Begin
   kPOINT:Begin
    Expect('(');
    X:=EvalN;
-   Expect(',');
-   Y:=EvalN;
-   Expect(')');
-   If ErrCode<>0 Then Exit;
-   If Not(InGraph)Then Begin
-    Err(5);
-    Exit;
-   End;
-   I:=SXp(RoundI(X));
-   N:=SYp(RoundI(Y));
-   If(I<0)or(N<0)or(I>GetMaxX)or(N>GetMaxY)Then Fix(-1,'%')
+   If Accept(',')Then Begin
+    Y:=EvalN;
+    Expect(')');
+    If(ErrCode=0)and Not(InGraph)Then Err(5);
+    If ErrCode<>0 Then Exit;
+    I:=SXp(MapX(X));
+    N:=SYp(MapY(Y));
+    If(I<0)or(N<0)or(I>GetMaxX)or(N>GetMaxY)Then Fix(-1,'%')
+                                            Else Fix(LogColor(GetPixel(I,N)),'%');
+   End
     Else
    Begin
-    N:=GetPixel(I,N);
-    I:=0;
-    While(I<15)and(GColor(I)<>N)do Inc(I);
-    Fix(I,'%');
+    Expect(')');
+    If ErrCode=0 Then Case RoundI(X)of
+     0:Fix(GLX,'%');
+     1:Fix(GLY,'%');
+     2:Fix(UnX(GLX),'!');
+     3:Fix(UnY(GLY),'!');
+     Else Err(5);
+    End;
    End;
   End;
   kSCREEN:Begin { SCREEN(ligne,colonne[,z]) }
@@ -2174,13 +2362,7 @@ Begin
      VS:=Chr(N);
      VT:='$';
     End;
-    150:Begin
-     {$IFDEF FPC}
-      Fix(0,'%');
-     {$ELSE}
-      Fix(Mem[DefSeg:Word(RoundI(X))],'%');
-     {$ENDIF}
-    End;
+    150:Fix(PeekB(DefSeg,Word(RoundI(X))),'%');
     151:Begin
      VS:=Rep(' ',ToByte);
      VT:='$';
@@ -2206,13 +2388,18 @@ Begin
     162:Begin { EOF }
      N:=CheckFile(ToInt,' ');
      If ErrCode=0 Then Begin
-      If FMode[N]='I'Then Fix(-Ord(FEof(N)),'%')
+      If FMode[N]='I'Then Fix(-Ord(FEof(N)),'%') Else
+      If FMode[N]='R'Then Fix(-Ord(FREof[N]),'%')
                      Else Fix(0,'%');
      End;
     End;
     163,164:Begin
      N:=CheckFile(ToInt,' ');
-     Fix(0,'%');
+     If ErrCode=0 Then Begin
+      If T=164 Then Fix(FileLen(N),'!') Else
+      If FMode[N]='R'Then Fix(FRec[N],'!')
+                     Else Fix(FCnt[N]div 128,'!');
+     End;
     End;
     205:If Length(VS)<2 Then Err(5)
                         Else Fix(Integer(Word(Ord(VS[1])+Ord(VS[2])*256)),'%');
@@ -2335,7 +2522,7 @@ Begin
    P:=Old;
   End;
   P:=SX-1+P;
-  If SY+P div ScrW>24 Then SY:=24-P div ScrW;
+  If SY+P div ScrW>VBot-VTop+1 Then SY:=VBot-VTop+1-P div ScrW;
   Old:=Length(S);
   P:=SX-2+I;
   GotoXY(P mod ScrW+1,SY+P div ScrW);
@@ -3036,8 +3223,17 @@ End;
 
 Procedure CloseFile(N:Integer);Begin
  If FMode[N]<>#0 Then Begin
-  {$I-}Close(FT[N]);{$I+}
+  {$I-}
+  If FMode[N]='R'Then Begin
+   Close(FR[N]);
+   FreeMem(FBuf[N],FLen[N]);
+   DropFields(N,NIL);
+  End
+   Else
+  Close(FT[N]);
+  {$I+}
   If IoResult<>0 Then;
+  SetStrP(@FNm[N],'');
   FMode[N]:=#0;
  End;
 End;
@@ -3052,7 +3248,7 @@ End;
 Procedure DoOpen;
 Var
  M:Char;
- N,E,K:Integer;
+ N,E,K,RL:Integer;
  W:TKey;
 Begin
  EvalS;
@@ -3060,6 +3256,7 @@ Begin
  PushS(VS);
  M:=' ';
  N:=0;
+ RL:=128;
  If AcceptTok(kFOR)Then Begin
   If AcceptTok(kINPUT)Then M:='I'
    Else
@@ -3075,7 +3272,7 @@ Begin
   N:=EvalI;
   If AcceptTok(kLEN)Then Begin
    Expect('=');
-   EvalI;
+   RL:=EvalI;
   End;
  End
   Else
@@ -3088,19 +3285,24 @@ Begin
   Expect(',');
   EvalS;
   If ErrCode=0 Then SS[K+1]:=VS;
-  If Accept(',')Then EvalI;
+  If Accept(',')Then RL:=EvalI;
  End;
  If ErrCode<>0 Then Exit;
  If(N<1)or(N>MaxFile)Then Err(52) Else
  If FMode[N]<>#0 Then Err(55) Else
- If M='R'Then Err(73) Else
- If Not(M in['I','O','A'])Then Err(54);
+ If(RL<1)or(RL>32767)Then Err(5) Else
+ If Not(M in['I','O','A','R'])Then Err(54);
  If ErrCode<>0 Then Exit;
  Assign(FT[N],SS[K+1]);
+ Assign(FR[N],SS[K+1]);
  {$I-}
  Case M of
   'I':Reset(FT[N]);
   'O':Rewrite(FT[N]);
+  'R':Begin
+   Reset(FR[N],1);
+   If IoResult<>0 Then Rewrite(FR[N],1);
+  End;
   Else Begin
    Append(FT[N]);
    If IoResult<>0 Then Rewrite(FT[N]);
@@ -3113,7 +3315,22 @@ Begin
  Begin
   FMode[N]:=M;
   FCol[N]:=0;
+  FCnt[N]:=0;
   FLook[N]:=-1;
+  SetStrP(@FNm[N],SS[K+1]);
+  If M='R'Then Begin
+   FBuf[N]:=Alloc(RL);
+   If FBuf[N]=NIL Then Begin
+    {$I-}Close(FR[N]);{$I+}
+    If IoResult<>0 Then;
+    FMode[N]:=#0;
+    Exit;
+   End;
+   FillChar(FBuf[N]^,RL,0);
+   FLen[N]:=RL;
+   FRec[N]:=0;
+   FREof[N]:=False;
+  End;
  End;
  SSP:=K;
 End;
@@ -3131,6 +3348,360 @@ Begin
   If(N<1)or(N>MaxFile)Then Err(52)
                       Else CloseFile(N);
  Until Not Accept(',');
+End;
+
+ { Fichiers … accŠs direct : FIELD, GET, PUT, LSET et RSET }
+Procedure SyncFields(N:Integer);
+Var
+ P:PField;
+ S:String;
+Begin
+ P:=FieldList;
+ While P<>NIL do Begin
+  If P^.F=N Then Begin
+   S[0]:=Chr(P^.Len);
+   Move(FBuf[N]^[P^.Ofs],S[1],P^.Len);
+   SetStrP(P^.P,S);
+  End;
+  P:=P^.Next;
+ End;
+End;
+
+Procedure DoField;
+Var
+ N,W,O:Integer;
+ R:TRef;
+ P:PField;
+Begin
+ Accept('#');
+ N:=CheckFile(EvalI,'R');
+ O:=0;
+ While(ErrCode=0)and Accept(',')do Begin
+  W:=EvalB;
+  If ReadWord<>'AS'Then SynErr;
+  GetVarRef(R);
+  If ErrCode<>0 Then Exit;
+  If R.T<>'$'Then Err(13) Else
+  If O+W>FLen[N]Then Err(50)
+   Else
+  Begin
+   DropFields(0,R.P);
+   P:=Alloc(SizeOf(TField));
+   If P=NIL Then Exit;
+   P^.F:=N;
+   P^.Ofs:=O;
+   P^.Len:=W;
+   P^.P:=R.P;
+   P^.Next:=FieldList;
+   FieldList:=P;
+   Inc(O,W);
+  End;
+ End;
+ If ErrCode=0 Then SyncFields(N);
+End;
+
+Procedure DoFileGetPut(IsPut:Boolean);
+Var
+ N,E:Integer;
+ Rec:Double;
+ Got:Word;
+Begin
+ Accept('#');
+ N:=CheckFile(EvalI,'R');
+ If ErrCode<>0 Then Exit;
+ Rec:=FRec[N]+1;
+ If Accept(',')Then Rec:=Int(EvalN);
+ If ErrCode<>0 Then Exit;
+ If(Rec<1)or(Rec>16777215.0)Then Begin
+  Err(63);
+  Exit;
+ End;
+ {$I-}
+ Seek(FR[N],(Trunc(Rec)-1)*LongInt(FLen[N]));
+ If(IsPut)Then BlockWrite(FR[N],FBuf[N]^,FLen[N])
+  Else
+ Begin
+  FillChar(FBuf[N]^,FLen[N],0);
+  Got:=0;
+  If FilePos(FR[N])<FileSize(FR[N])Then BlockRead(FR[N],FBuf[N]^,FLen[N],Got);
+  FREof[N]:=Got<FLen[N];
+  SyncFields(N);
+ End;
+ {$I+}
+ E:=IoResult;
+ If E<>0 Then Err(IOErr(E));
+ FRec[N]:=Trunc(Rec);
+End;
+
+Procedure DoLRSet(IsR:Boolean);
+Var
+ R:TRef;
+ P:PField;
+ L:Integer;
+ S:String;
+Begin
+ GetVarRef(R);
+ If(ErrCode=0)and(R.T<>'$')Then Err(13);
+ Expect('=');
+ If ErrCode=0 Then EvalS;
+ If ErrCode<>0 Then Exit;
+ P:=FieldList;
+ While(P<>NIL)and(P^.P<>R.P)do P:=P^.Next;
+ If P<>NIL Then L:=P^.Len Else
+ If PStrPtr(R.P)^=NIL Then L:=0
+                      Else L:=Length(PStrPtr(R.P)^^);
+ If Length(VS)>L Then VS[0]:=Chr(L);
+ If(IsR)Then S:=Rep(' ',L-Length(VS))+VS
+        Else S:=VS+Rep(' ',L-Length(VS));
+ If P<>NIL Then Move(S[1],FBuf[P^.F]^[P^.Ofs],L);
+ SetStrP(R.P,S);
+End;
+
+ { R‚f‚rence … un tableau (nom seul ou ‚l‚ment de d‚part) }
+Procedure ArrRef(Var A:PArr;Var O:Word);
+Var
+ K:TKey;
+ P:Integer;
+ R:TRef;
+Begin
+ O:=0;
+ A:=NIL;
+ SkipSp;
+ P:=CurrPos;
+ If Not(Cur in['A'..'Z'])Then Begin
+  SynErr;
+  Exit;
+ End;
+ ReadName(K);
+ If Cur in['(','[']Then Begin
+  CurrPos:=P;
+  GetVarRef(R);
+  If ErrCode<>0 Then Exit;
+  A:=FindArr(K);
+  {$IFDEF FPC}
+   O:=PtrUInt(R.P)-PtrUInt(A^.Data);
+  {$ELSE}
+   O:=Ofs(R.P^)-Ofs(A^.Data^);
+  {$ENDIF}
+ End
+  Else
+ A:=FindArr(K);
+ If A=NIL Then Err(5);
+End;
+
+ { BSAVE "fichier",d‚placement,longueur et BLOAD "fichier"[,d‚placement] }
+Procedure DoBSaveLoad(IsLoad:Boolean);
+Var
+ F:File;
+ H:Array[0..6]of Byte;
+ Buf:Array[0..255]of Byte;
+ K,E,I:Integer;
+ S,O,L,N,R:Word;
+ HasO:Boolean;
+Begin
+ EvalS;
+ K:=SSP;
+ PushS(VS);
+ S:=DefSeg;
+ O:=0;
+ L:=0;
+ HasO:=Accept(',');
+ If(HasO)Then O:=Word(RoundI(EvalN));
+ If Not(IsLoad)Then Begin
+  Expect(',');
+  L:=Word(RoundI(EvalN));
+ End;
+ If ErrCode<>0 Then Exit;
+ Assign(F,SS[K+1]);
+ {$I-}
+ If(IsLoad)Then Begin
+  Reset(F,1);
+  E:=IoResult;
+  If E=0 Then Begin
+   BlockRead(F,H,7,R);
+   If(R<7)or(H[0]<>$FD)Then E:=-1
+    Else
+   Begin
+    If Not(HasO)Then Begin
+     S:=H[1]+H[2]*256;
+     O:=H[3]+H[4]*256;
+    End;
+    L:=H[5]+H[6]*256;
+    While L>0 do Begin
+     N:=SizeOf(Buf);
+     If N>L Then N:=L;
+     BlockRead(F,Buf,N,R);
+     If R=0 Then L:=0;
+     For I:=0 to Integer(R)-1 do PokeB(S,O+I,Buf[I]);
+     Inc(O,R);
+     Dec(L,R);
+    End;
+   End;
+   Close(F);
+  End;
+ End
+  Else
+ Begin
+  Rewrite(F,1);
+  E:=IoResult;
+  If E=0 Then Begin
+   H[0]:=$FD;
+   H[1]:=Lo(S);
+   H[2]:=Hi(S);
+   H[3]:=Lo(O);
+   H[4]:=Hi(O);
+   H[5]:=Lo(L);
+   H[6]:=Hi(L);
+   BlockWrite(F,H,7);
+   While L>0 do Begin
+    N:=SizeOf(Buf);
+    If N>L Then N:=L;
+    For I:=0 to N-1 do Buf[I]:=PeekB(S,O+I);
+    BlockWrite(F,Buf,N);
+    Inc(O,N);
+    Dec(L,N);
+   End;
+   Close(F);
+  End;
+ End;
+ {$I+}
+ If IoResult<>0 Then;
+ If E<0 Then Err(54) Else
+ If E>0 Then Err(IOErr(E));
+ SSP:=K;
+End;
+
+ { CALL et CALLS : appel d'une routine en langage machine (DEF SEG:adresse).
+   CALL passe le d‚placement de chaque variable, CALLS son adresse longue. }
+Procedure DoCall(IsS:Boolean);
+Var
+ K:TKey;
+ V:PVar;
+ R:TRef;
+ N:Integer;
+ A:Array[1..MaxParm]of Pointer;
+ P:Pointer;
+ SaveDS:Word;
+Begin
+ If Not(NextCh in['A'..'Z'])Then Begin
+  SynErr;
+  Exit;
+ End;
+ ReadName(K);
+ V:=FindVar(K);
+ VN:=0;
+ If V<>NIL Then Begin
+  R.T:=K[Length(K)];
+  R.P:=@V^.Value;
+  LoadRef(R);
+  If VT='$'Then Err(13);
+ End;
+ P:=NIL;
+ {$IFNDEF FPC}
+  P:=Ptr(DefSeg,Word(RoundI(VN)));
+ {$ENDIF}
+ N:=0;
+ If Accept('(')Then Begin
+  Repeat
+   If N>=MaxParm Then SynErr;
+   GetVarRef(R);
+   If ErrCode<>0 Then Exit;
+   Inc(N);
+   A[N]:=R.P;
+  Until Not Accept(',');
+  Expect(')');
+ End;
+ If ErrCode<>0 Then Exit;
+ {$IFDEF FPC}
+  Err(5);
+ {$ELSE}
+  SaveDS:=DSeg;
+  Asm
+   mov cx,N
+   lea si,A
+   jcxz @go
+  @lp:
+   cmp byte ptr IsS,0
+   je @near
+   push word ptr ss:[si+2]
+  @near:
+   push word ptr ss:[si]
+   add si,4
+   loop @lp
+  @go:
+   call dword ptr P
+   mov ds,SaveDS
+  End;
+ {$ENDIF}
+End;
+
+Procedure SetPal(A,C:Integer);
+{$IFNDEF FPC}
+ Var
+  Regs:Registers;
+{$ENDIF}
+Begin
+ If(InGraph)Then SetPalette(GColor(A),C)
+ {$IFNDEF FPC}
+  Else
+ Begin
+  Regs.AX:=$1000;
+  Regs.BL:=A;
+  Regs.BH:=C;
+  Intr($10,Regs);
+ End;
+ {$ENDIF}
+End;
+
+Procedure DoPalette;
+Var
+ A,C,I:Integer;
+ Arr:PArr;
+ O:Word;
+ Pal:PaletteType;
+Begin
+ If(EndOfStmt)Then Begin
+  If(InGraph)Then Begin
+   GetDefaultPalette(Pal);
+   SetAllPalette(Pal);
+  End;
+  Exit;
+ End;
+ If AcceptTok(kUSING)Then Begin
+  ArrRef(Arr,O);
+  If ErrCode<>0 Then Exit;
+  If Arr^.Name[Length(Arr^.Name)]<>'%'Then Err(13) Else
+  If O+32>Arr^.Size Then Err(5)
+   Else
+  For I:=0 to 15 do Begin
+   C:=PInt(@Arr^.Data^[O+I*2])^;
+   If(C>=0)and(C<=63)Then SetPal(I,C);
+  End;
+  Exit;
+ End;
+ A:=EvalI;
+ Expect(',');
+ C:=EvalI;
+ If ErrCode<>0 Then Exit;
+ If(A<0)or(A>15)or(C<-1)or(C>63)Then Err(5) Else
+ If C>=0 Then SetPal(A,C);
+End;
+
+Procedure DoWait;
+Var
+ P:Word;
+ A,X:Integer;
+Begin
+ P:=Word(RoundI(EvalN));
+ Expect(',');
+ A:=EvalB;
+ X:=0;
+ If Accept(',')Then X:=EvalB;
+ {$IFNDEF FPC}
+  If ErrCode=0 Then Repeat
+   PollKey;
+  Until((Port[P]xor X)and A<>0)or(BreakFlag);
+ {$ENDIF}
 End;
 
  { Affectations et d‚clarations }
@@ -3546,6 +4117,8 @@ Procedure PushGosub(N:Word);Begin
   Pos:=CurrPos;
   FSP:=ForSP;
   WSP:=WhileSP;
+  Jmp:=False;
+  Ev:=0;
  End;
  JumpTo(N);
  If ErrCode<>0 Then Dec(GosubSP);
@@ -3560,21 +4133,118 @@ Procedure DoReturn;Begin
   ForSP:=FSP;
   WhileSP:=WSP;
   Dec(GosubSP);
+  If(Ev>0)and(EvSt[Ev]=2)Then EvSt[Ev]:=1;
   If(IsDigit)Then JumpTo(ParseLineNum)
    Else
   Begin
    LoadLine(LP);
    CurrPos:=Pos;
+   Jumped:=Jmp;
   End;
+ End;
+End;
+
+
+ { Interception des ‚v‚nements : KEY(n), TIMER, COM(n), PEN, PLAY, STRIG(n) }
+Function EvParse(T:Integer;IsOn:Boolean):Integer;
+Var
+ X:Double;
+ N:Integer;
+Begin
+ EvParse:=0;
+ X:=0;
+ If(T<>kPEN)and(IsOn or Not(T in[kTIMER,kPLAY]))Then Begin
+  Expect('(');
+  X:=EvalN;
+  Expect(')');
+ End;
+ If ErrCode<>0 Then Exit;
+ N:=RoundI(X);
+ Case T of
+  kKEY:If(N<1)or(N>20)Then Err(5)
+                      Else EvParse:=N;
+  kTIMER:Begin
+   If(IsOn)Then Begin
+    If(X<=0)or(X>86400)Then Err(5);
+    TimerInt:=X;
+   End;
+   EvParse:=21;
+  End;
+  kCOM:If(N<1)or(N>2)Then Err(5)
+                     Else EvParse:=21+N;
+  kPEN:EvParse:=24;
+  kPLAY:EvParse:=25;
+  Else If(N<0)or(N>6)or Odd(N)Then Err(5)
+                              Else EvParse:=26+N div 2;
+ End;
+End;
+
+Procedure DoEvSet(I:Integer);Begin
+ If ErrCode<>0 Then Exit;
+ If AcceptTok(kON)Then Begin
+  EvSt[I]:=1;
+  If I=21 Then TimerRef:=Secs;
+ End
+  Else
+ If AcceptTok(kOFF)Then Begin
+  EvSt[I]:=0;
+  EvPend[I]:=False;
+ End
+  Else
+ If AcceptTok(kSTOP)Then EvSt[I]:=2
+                    Else SynErr;
+End;
+
+ { D‚clenche un ‚v‚nement en attente : GOSUB implicite }
+Procedure FireEvent;
+Var
+ I,J:Integer;
+ S:Double;
+Begin
+ If EvSt[21]=1 Then Begin
+  S:=Secs-TimerRef;
+  If S<0 Then S:=S+86400;
+  If S>=TimerInt Then Begin
+   EvPend[21]:=True;
+   TimerRef:=Secs;
+  End;
+ End;
+ For I:=1 to 29 do If(EvPend[I])and(EvSt[I]=1)and(EvLine[I]<>0)Then Begin
+  EvPend[I]:=False;
+  If(GosubSP<MaxGosub)and FindLine(EvLine[I],J)Then Begin
+   Inc(GosubSP);
+   With GosubStk[GosubSP]do Begin
+    LP:=CurrLinePtr;
+    Pos:=CurrPos;
+    FSP:=ForSP;
+    WSP:=WhileSP;
+    Jmp:=True;
+    Ev:=I;
+   End;
+   EvSt[I]:=2;
+   GotoIdx(J);
+  End;
+  Exit;
  End;
 End;
 
 Procedure DoOn;
 Var
- N,K:Integer;
+ N,K,T:Integer;
  L,Target:Word;
  IsSub:Boolean;
 Begin
+ T:=PeekTok;
+ If T in[kKEY,kTIMER,kCOM,kPEN,kPLAY,kSTRIG]Then Begin
+  SkipTok;
+  N:=EvParse(T,True);
+  ExpectTok(kGOSUB);
+  L:=ParseLineNum;
+  If ErrCode<>0 Then Exit;
+  If(L<>0)and Not FindLine(L,K)Then Err(8)
+                               Else EvLine[N]:=L;
+  Exit;
+ End;
  If AcceptTok(kERROR)Then Begin
   ExpectTok(kGOTO);
   L:=ParseLineNum;
@@ -3686,6 +4356,10 @@ Begin
  InHandler:=False;
  ContOk:=False;
  CloseAll;
+ FillChar(EvSt,SizeOf(EvSt),0);
+ FillChar(EvPend,SizeOf(EvPend),0);
+ FillChar(EvLine,SizeOf(EvLine),0);
+ CommonStr:=',';
 End;
 
 Procedure AddExt(Var S:String);
@@ -4296,14 +4970,15 @@ Begin
    If I<N Then Write(Rep(' ',7-Length(Temp)));
   End;
  End;
- Window(1,1,ScrW,24);
+ Window(1,VTop,ScrW,VBot);
  GotoXY(OldX,OldY);
 End;
 
 Procedure DoCls;Begin
  If Not(EndOfStmt)Then EvalI;
  If(InGraph)Then Begin
-  ClearDevice;
+  If(ViewOn)Then ClearViewPort
+            Else ClearDevice;
   GCol:=0;
   GRow:=0;
  End
@@ -4349,7 +5024,7 @@ Procedure DoLocate;
 Var
  R,C:Integer;
 Begin
- R:=WhereY;
+ R:=WhereY+VTop-1;
  C:=WhereX;
  If(InGraph)Then Begin
   R:=GRow+1;
@@ -4361,19 +5036,24 @@ Begin
   While Accept(',')do If Not(EndOfStmt)and(NextCh<>',')Then EvalI;
  End;
  If ErrCode<>0 Then Exit;
- If(R<1)or(R>24)or(C<1)or(C>ScrW)Then Err(5) Else
  If(InGraph)Then Begin
-  GRow:=R-1;
-  GCol:=C-1;
+  If(R<1)or(R>24)or(C<1)or(C>ScrW)Then Err(5)
+   Else
+  Begin
+   GRow:=R-1;
+   GCol:=C-1;
+  End;
  End
   Else
- GotoXY(C,R);
+ If(R<VTop)or(R>VBot)or(C<1)or(C>ScrW)Then Err(5)
+                                      Else GotoXY(C,R-VTop+1);
 End;
 
 Procedure DoKey;
 Var
  N:Integer;
 Begin
+ If NextCh='('Then DoEvSet(EvParse(kKEY,False)) Else
  If AcceptTok(kON)Then Begin
   KeyFunction:=True;
   ShowFunctionKey;
@@ -4424,6 +5104,8 @@ Begin
   If N=40 Then TextMode(C40)
           Else TextMode(C80);
   ScrW:=N;
+  VTop:=1;
+  VBot:=24;
   Window(1,1,ScrW,24);
   ClrScr;
   ShowFunctionKey;
@@ -4543,17 +5225,20 @@ End;
 Procedure ParseXY(Var X,Y:Integer);
 Var
  Rel:Boolean;
+ A,B:Double;
 Begin
  Rel:=AcceptTok(kSTEP);
  Expect('(');
- X:=EvalI;
+ A:=EvalN;
  Expect(',');
- Y:=EvalI;
+ B:=EvalN;
  Expect(')');
  If(Rel)Then Begin
-  Inc(X,GLX);
-  Inc(Y,GLY);
+  A:=A+UnX(GLX);
+  B:=B+UnY(GLY);
  End;
+ X:=MapX(A);
+ Y:=MapY(B);
 End;
 
 Function OptColor:Integer;Begin
@@ -4574,6 +5259,8 @@ Begin
    CloseGraph;
    InGraph:=False;
    ScrW:=80;
+   VTop:=1;
+   VBot:=24;
    Window(1,1,ScrW,24);
    ClrScr;
    ShowFunctionKey;
@@ -4591,6 +5278,11 @@ Begin
     End;
     InGraph:=True;
    End;
+   SetViewPort(0,0,GetMaxX,GetMaxY,ClipOn);
+   ViewOn:=False;
+   WinOn:=False;
+   VOX:=0;
+   VOY:=0;
    GMode:=M;
    GW:=640;
    GH:=200;
@@ -4691,6 +5383,7 @@ Begin
   End;
  End;
  If ErrCode<>0 Then Exit;
+ If(WinOn)Then R:=R*(VWid-1)/Abs(WX2-WX1);
  If Asp<=0 Then Asp:=1;
  RX:=R;
  RY:=R*Asp;
@@ -4881,6 +5574,322 @@ Begin
  End;
 End;
 
+Function Bpp:Integer;Begin
+ Case GMode of
+  1:Bpp:=2;
+  2:Bpp:=1;
+  Else Bpp:=4;
+ End;
+End;
+
+ { GET (x1,y1)-(x2,y2),tableau et PUT (x,y),tableau[,action] graphiques,
+   au format du GW-BASIC : largeur en bits, hauteur, puis les pixels. }
+Procedure DoGraphGetPut(IsPut:Boolean);
+Var
+ X1,Y1,X2,Y2,X,Y,B,W,H,RB,C,E,Act:Integer;
+ A:PArr;
+ O,Q:Word;
+Begin
+ If Not(NeedGraph)Then Exit;
+ ParseXY(X1,Y1);
+ If Not(IsPut)Then Begin
+  Expect('-');
+  ParseXY(X2,Y2);
+ End;
+ Expect(',');
+ ArrRef(A,O);
+ Act:=kXOR;
+ If(IsPut)and Accept(',')Then Begin
+  Act:=PeekTok;
+  If Act in[kPSET,kPRESET,kAND,kOR,kXOR]Then SkipTok
+                                       Else SynErr;
+ End;
+ If ErrCode<>0 Then Exit;
+ B:=Bpp;
+ If(IsPut)Then Begin
+  W:=PInt(@A^.Data^[O])^div B;
+  H:=PInt(@A^.Data^[O+2])^;
+  X2:=X1+W-1;
+  Y2:=Y1+H-1;
+ End
+  Else
+ Begin
+  If X1>X2 Then Begin
+   X:=X1;
+   X1:=X2;
+   X2:=X;
+  End;
+  If Y1>Y2 Then Begin
+   Y:=Y1;
+   Y1:=Y2;
+   Y2:=Y;
+  End;
+  W:=X2-X1+1;
+  H:=Y2-Y1+1;
+ End;
+ RB:=(W*B+7)div 8;
+ If(W<1)or(H<1)or(4+LongInt(RB)*H>A^.Size-O)or(X1<0)or(Y1<0)or
+   (X2>=GW)or(Y2>=GH)Then Begin
+  Err(5);
+  Exit;
+ End;
+ If Not(IsPut)Then Begin
+  PInt(@A^.Data^[O])^:=W*B;
+  PInt(@A^.Data^[O+2])^:=H;
+  FillChar(A^.Data^[O+4],RB*H,0);
+ End;
+ For Y:=0 to H-1 do For X:=0 to W-1 do Begin
+  Q:=O+4+Y*RB+(X*B)div 8;
+  E:=8-B-(X*B)mod 8;
+  C:=LogColor(GetPixel(SXp(X1+X),SYp(Y1+Y)));
+  If(IsPut)Then Begin
+   E:=(A^.Data^[Q]shr E)and(1 shl B-1);
+   Case Act of
+    kPSET:C:=E;
+    kPRESET:C:=Not E and(1 shl B-1);
+    kAND:C:=C and E;
+    kOR:C:=C or E;
+    Else C:=C xor E;
+   End;
+   SetFillStyle(SolidFill,GColor(C));
+   Bar(SXp(X1+X),SYp(Y1+Y),SXp(X1+X+1)-1,SYp(Y1+Y+1)-1);
+  End
+   Else
+  A^.Data^[Q]:=A^.Data^[Q]or((C and(1 shl B-1))shl E);
+ End;
+End;
+
+ { VIEW [[SCREEN](x1,y1)-(x2,y2)[,[couleur][,bordure]]] et VIEW PRINT }
+Procedure DoView;
+Var
+ S:Boolean;
+ X1,Y1,X2,Y2,F,B:Integer;
+Begin
+ If AcceptTok(kPRINT)Then Begin
+  X1:=1;
+  Y1:=24;
+  If Not(EndOfStmt)Then Begin
+   X1:=EvalI;
+   ExpectTok(kTO);
+   Y1:=EvalI;
+  End;
+  If ErrCode<>0 Then Exit;
+  If(X1<1)or(Y1>24)or(X1>Y1)Then Err(5)
+   Else
+  Begin
+   VTop:=X1;
+   VBot:=Y1;
+   If Not(InGraph)Then Window(1,VTop,ScrW,VBot);
+  End;
+  Exit;
+ End;
+ If Not(NeedGraph)Then Exit;
+ SetViewPort(0,0,GetMaxX,GetMaxY,ClipOn);
+ ViewOn:=False;
+ VOX:=0;
+ VOY:=0;
+ If(EndOfStmt)Then Exit;
+ S:=AcceptTok(kSCREEN);
+ Expect('(');
+ X1:=EvalI;
+ Expect(',');
+ Y1:=EvalI;
+ Expect(')');
+ Expect('-');
+ Expect('(');
+ X2:=EvalI;
+ Expect(',');
+ Y2:=EvalI;
+ Expect(')');
+ F:=-1;
+ B:=-1;
+ If Accept(',')Then Begin
+  If Not(EndOfStmt)and(NextCh<>',')Then F:=EvalI;
+  If Accept(',')Then B:=EvalI;
+ End;
+ If ErrCode<>0 Then Exit;
+ If X1>X2 Then Begin
+  F:=F;
+  X1:=X1 xor X2;
+  X2:=X1 xor X2;
+  X1:=X1 xor X2;
+ End;
+ If Y1>Y2 Then Begin
+  Y1:=Y1 xor Y2;
+  Y2:=Y1 xor Y2;
+  Y1:=Y1 xor Y2;
+ End;
+ If(X1<0)or(Y1<0)or(X2>=GW)or(Y2>=GH)Then Begin
+  Err(5);
+  Exit;
+ End;
+ If B>=0 Then Begin
+  SetColor(GColor(B));
+  Rectangle(SXp(X1-1),SYp(Y1-1),SXp(X2+1),SYp(Y2+1));
+ End;
+ SetViewPort(SXp(X1),SYp(Y1),SXp(X2+1)-1,SYp(Y2+1)-1,ClipOn);
+ If F>=0 Then Begin
+  SetFillStyle(SolidFill,GColor(F));
+  Bar(0,0,SXp(X2+1)-1-SXp(X1),SYp(Y2+1)-1-SYp(Y1));
+ End;
+ ViewOn:=True;
+ VX1:=X1;
+ VY1:=Y1;
+ VX2:=X2;
+ VY2:=Y2;
+ If(S)Then Begin
+  VOX:=X1;
+  VOY:=Y1;
+ End;
+ GLX:=VOX+(X2-X1)div 2;
+ GLY:=VOY+(Y2-Y1)div 2;
+End;
+
+ { WINDOW [[SCREEN](x1,y1)-(x2,y2)] }
+Procedure DoWindow;
+Var
+ T:Double;
+Begin
+ If Not(NeedGraph)Then Exit;
+ WinOn:=False;
+ If(EndOfStmt)Then Exit;
+ WinScr:=AcceptTok(kSCREEN);
+ Expect('(');
+ WX1:=EvalN;
+ Expect(',');
+ WY1:=EvalN;
+ Expect(')');
+ Expect('-');
+ Expect('(');
+ WX2:=EvalN;
+ Expect(',');
+ WY2:=EvalN;
+ Expect(')');
+ If ErrCode<>0 Then Exit;
+ If(WX1=WX2)or(WY1=WY2)Then Begin
+  Err(5);
+  Exit;
+ End;
+ If WX1>WX2 Then Begin
+  T:=WX1;
+  WX1:=WX2;
+  WX2:=T;
+ End;
+ If WY1>WY2 Then Begin
+  T:=WY1;
+  WY1:=WY2;
+  WY2:=T;
+ End;
+ WinOn:=True;
+End;
+
+ { COMMON et CHAIN [MERGE] f$[,[ligne][,[ALL][,DELETE intervalle]]] }
+Procedure DoCommon;
+Var
+ K:TKey;
+Begin
+ Repeat
+  If Not(NextCh in['A'..'Z'])Then Begin
+   SynErr;
+   Exit;
+  End;
+  ReadName(K);
+  If Accept('(')Then Begin
+   Expect(')');
+   K:=K+'()';
+  End;
+  If Length(CommonStr)+Length(K)<254 Then CommonStr:=CommonStr+K+',';
+ Until Not Accept(',');
+End;
+
+Procedure KeepCommon;
+Var
+ V,PV,NV:PVar;
+ A,PAr,NA:PArr;
+Begin
+ DropFields(0,NIL);
+ V:=VarList;
+ PV:=NIL;
+ While V<>NIL do Begin
+  NV:=V^.Next;
+  If Pos(','+V^.Name+',',CommonStr)=0 Then Begin
+   If PV=NIL Then VarList:=NV
+             Else PV^.Next:=NV;
+   If V^.Name[Length(V^.Name)]='$'Then SetStrP(@V^.Value,'');
+   FreeMem(V,SizeOf(TVar)-41+Length(V^.Name));
+  End
+   Else
+  PV:=V;
+  V:=NV;
+ End;
+ A:=ArrList;
+ PAr:=NIL;
+ While A<>NIL do Begin
+  NA:=A^.Next;
+  If Pos(','+A^.Name+'(),',CommonStr)=0 Then Begin
+   If PAr=NIL Then ArrList:=NA
+              Else PAr^.Next:=NA;
+   FreeArr(A);
+  End
+   Else
+  PAr:=A;
+  A:=NA;
+ End;
+End;
+
+Procedure DoChain;
+Var
+ Mg,All,Del:Boolean;
+ L,A,B:Word;
+ K,I:Integer;
+Begin
+ Mg:=AcceptTok(kMERGE);
+ EvalS;
+ K:=SSP;
+ PushS(VS);
+ L:=0;
+ I:=-1;
+ All:=False;
+ Del:=False;
+ If Accept(',')Then Begin
+  If(IsDigit)Then Begin
+   L:=ParseLineNum;
+   I:=0;
+  End;
+  If Accept(',')Then Begin
+   If Not(PeekTok=kDELETE)and(NextCh<>',')Then All:=ReadWord='ALL';
+   If Accept(',')or(PeekTok=kDELETE)Then Begin
+    ExpectTok(kDELETE);
+    ParseRange(A,B);
+    Del:=True;
+   End;
+  End;
+ End;
+ If ErrCode<>0 Then Exit;
+ If(Del)Then Begin
+  I:=1;
+  While I<=NumberLine do If(PA[I]^.Num>=A)and(PA[I]^.Num<=B)Then RemoveLine(I)
+                                                         Else Inc(I);
+  I:=-1;
+  If L<>0 Then I:=0;
+ End;
+ If Not(All or Mg)Then KeepCommon;
+ CommonStr:=',';
+ LoadProgram(SS[K+1],Mg);
+ SSP:=K;
+ If ErrCode<>0 Then Exit;
+ FreeFns;
+ ForSP:=0;
+ GosubSP:=0;
+ WhileSP:=0;
+ DataPtr:=1;
+ DataPos:=1;
+ DataIn:=False;
+ If NumberLine=0 Then StopExec:=True Else
+ If I>=0 Then JumpTo(L)
+         Else GotoIdx(1);
+End;
+
 Procedure HelpCommand;
 Var
  I:Integer;
@@ -4965,10 +5974,6 @@ Begin
    ContJump:=False;
   End;
   kPRINT:DoPrint(0);
-  kCLEAR:Begin
-   SkipStmt;
-   ClearAll;
-  End;
   kLIST:DoList(0);
   kNEW:Begin
    FreeLines;
@@ -4976,17 +5981,17 @@ Begin
    StopExec:=True;
   End;
   kON:DoOn;
-  kWAIT,kMOTOR,kCOMMON:SkipStmt;
+  kMOTOR:SkipStmt;
   kDEF:DoDef;
   kPOKE,kOUT:Begin
    X:=EvalN;
    Expect(',');
    I:=EvalB;
    If ErrCode=0 Then Begin
+    If T=kPOKE Then PokeB(DefSeg,Word(RoundI(X)),I)
     {$IFNDEF FPC}
-     If T=kPOKE Then Mem[DefSeg:Word(RoundI(X))]:=I
-                Else Port[Word(RoundI(X))]:=I;
-    {$ENDIF}
+               Else Port[Word(RoundI(X))]:=I
+    {$ENDIF};
    End;
   End;
   kCONT:If Not(ContOk)Then Err(17)
@@ -5117,36 +6122,42 @@ Begin
   kNAME:DoName;
   kKILL:DoKill;
   kRESET:CloseAll;
-  kCHAIN:Begin
-   EvalS;
-   If ErrCode<>0 Then Exit;
-   I:=-1;
-   If Accept(',')Then Begin
-    If(IsDigit)Then I:=ParseLineNum;
-    If Accept(',')Then ReadWord;
-   End;
-   LoadProgram(VS,False);
-   If ErrCode<>0 Then Exit;
-   FreeFns;
-   ForSP:=0;
-   GosubSP:=0;
-   WhileSP:=0;
-   DataPtr:=1;
-   DataPos:=1;
-   DataIn:=False;
-   If NumberLine=0 Then StopExec:=True Else
-   If I>=0 Then JumpTo(I)
-           Else GotoIdx(1);
+  kCHAIN:DoChain;
+  kCOMMON:DoCommon;
+  kCAT:DoFiles;
+  kCLEAR,kCLR:Begin
+   SkipStmt;
+   ClearAll;
   End;
+  kFIELD:DoField;
+  kGET,kPUT:If(NextCh='(')or(PeekTok=kSTEP)Then DoGraphGetPut(T=kPUT)
+                                           Else DoFileGetPut(T=kPUT);
+  kLSET,kRSET:DoLRSet(T=kRSET);
+  kBLOAD,kBSAVE:DoBSaveLoad(T=kBLOAD);
+  kCALL,kCALLS:DoCall(T=kCALLS);
+  kPALETTE:DoPalette;
+  kWAIT:DoWait;
+  kVIEW:DoView;
+  kWINDOW:DoWindow;
+  kTIMER,kCOM,kPEN,kSTRIG:Begin
+   If(T=kSTRIG)and(NextCh<>'(')Then Begin
+    If Not(AcceptTok(kON)or AcceptTok(kOFF))Then SynErr;
+   End
+    Else
+   DoEvSet(EvParse(T,False));
+  End;
+  kLOCK,kUNLOCK,kLCOPY,kPCOPY:SkipStmt;
   kDATE,kTIME:DoSetDateTime(T);
   kPAINT:DoPaint;
   kCIRCLE:DoCircle;
   kDRAW:DoDraw;
-  kPLAY:DoPlay;
+  kPLAY:If PeekTok in[kON,kOFF,kSTOP]Then DoEvSet(25)
+                                    Else DoPlay;
   kCHDIR,kMKDIR,kRMDIR:DoDir(T);
   kSHELL:DoShell;
   kTO,kTHEN,kTAB,kSTEP,kUSR,kFN,kSPC,kNOT,kERL,kERR,kSTRING,kUSING,kINSTR,
-  kVARPTR,kCSRLIN,kPOINT,kOFF,kINKEY,kAND..kMOD,128,129,131..164,205..215:SynErr;
+  kVARPTR,kCSRLIN,kPOINT,kOFF,kINKEY,kAND..kMOD,128,129,131..158,160,162..164,
+  kERDEV,kPMAP,205..215:SynErr;
   Else Err(73);
  End;
 End;
@@ -5196,7 +6207,10 @@ Begin
  StopExec:=False;
  Repeat
   Inc(PollCnt);
-  If PollCnt and 15=0 Then PollKey;
+  If PollCnt and 15=0 Then Begin
+   PollKey;
+   If CurrLinePtr>0 Then FireEvent;
+  End;
   If(BreakFlag)Then Begin
    BreakFlag:=False;
    DoBreak(CurrPos);
@@ -5205,6 +6219,7 @@ Begin
   StmtPtr:=CurrLinePtr;
   StmtPos:=CurrPos;
   SSP:=0;
+  EvDepth:=0;
   OutF:=0;
   Jumped:=False;
   ExecStatement;
@@ -5339,6 +6354,10 @@ BEGIN
   FunctionKeyList[9]:='KEY ';
   FunctionKeyList[10]:='SCREEN';
   ScrW:=80;
+  VTop:=1;
+  VBot:=24;
+  TimerInt:=1;
+  FieldList:=NIL;
   InGraph:=False;
   Tron:=False;
   KeyFunction:=True;

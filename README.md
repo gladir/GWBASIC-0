@@ -5,6 +5,20 @@ Clone GWBASIC du DOS écrit en Pascal  (Turbo Pascal ou Free Pascal).
 
 <h2>Quoi de neuf</h2>
 
+<h4>Version 0.81</h4>
+<ul>
+  <li>Ajout des fichiers à accès direct : OPEN "R" / FOR RANDOM ... LEN=, FIELD, GET #, PUT #, LSET, RSET, LOC, LOF et EOF.</li>
+  <li>Ajout de GET et PUT graphiques (format de tableau du GW-BASIC, actions PSET, PRESET, AND, OR, XOR).</li>
+  <li>Ajout de VIEW, VIEW SCREEN, VIEW PRINT, WINDOW, WINDOW SCREEN, de la fonction PMAP et de POINT(n).</li>
+  <li>Ajout de PALETTE et PALETTE USING.</li>
+  <li>Ajout de BLOAD et BSAVE (sous Free Pascal, PEEK/POKE/BLOAD/BSAVE utilisent un segment de 64 Ko simulé).</li>
+  <li>Ajout de CALL et CALLS (Turbo Pascal seulement, appel d'une routine en langage machine à DEF SEG:adresse).</li>
+  <li>Ajout de COMMON ; CHAIN supporte MERGE, ALL et DELETE.</li>
+  <li>Ajout de l'interception des événements : ON KEY(n), ON TIMER(n), ON COM(n), ON PEN, ON PLAY(n), ON STRIG(n) ... GOSUB, avec KEY(n), TIMER, COM(n), PEN, PLAY et STRIG ON/OFF/STOP.</li>
+  <li>Ajout de WAIT ; LOCK, UNLOCK, PCOPY et LCOPY sont acceptés.</li>
+  <li>Ajout des commandes CAT (comme FILES) et CLR (comme CLEAR).</li>
+</ul>
+
 <h4>Version 0.80</h4>
 <ul>
   <li>Réécriture de l'évaluateur d'expressions : priorité des opérateurs conforme au GW-BASIC (^, négation, * /, \, MOD, + -, relationnels, NOT, AND, OR, XOR, EQV, IMP), types entier (%), simple (!) et double (#) précision, chaînes.</li>
