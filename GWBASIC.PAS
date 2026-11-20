@@ -19,7 +19,7 @@ Uses {$IFDEF FPC}
      {$ENDIF};
 
 Const
- Version='0.81';
+ Version='0.82';
  MaxLine=2000;
  MaxFile=15;
  MaxDim=8;
@@ -47,7 +47,7 @@ Const
   'CSRLIN','POINT','OFF','INKEY$','','','','','','',
   '','','','','','','','','','AND',
   'OR','XOR','EQV','IMP','MOD','','HELP','SLEEP','CAT','CLR',
-  '','','','','','','','LEFT$','RIGHT$','MID$',
+  'LTRIM$','RTRIM$','TRIM$','','','','','LEFT$','RIGHT$','MID$',
   'SGN','INT','ABS','SQR','RND','SIN','LOG','EXP','COS','TAN',
   'ATN','FRE','INP','POS','LEN','STR$','VAL','ASC','CHR$','PEEK',
   'SPACE$','OCT$','HEX$','LPOS','CINT','CSNG','CDBL','FIX','PEN','STICK',
@@ -76,7 +76,7 @@ Const
  kSHELL=190;kENVIRON=191;kERDEV=185;kCAT=119;kCLR=120;kCALL=51;kBLOAD=67;
  kCOM=180;kPEN=159;kSTRIG=161;kFIELD=166;kLSET=169;kRSET=170;kPUT=172;kGET=173;
  kVIEW=192;kWINDOW=193;kPMAP=194;kPALETTE=195;kLCOPY=196;kCALLS=197;kPCOPY=201;
- kLOCK=203;kUNLOCK=204;
+ kLOCK=203;kUNLOCK=204;kLTRIM=121;kTRIM=123;kEXTERR=215;
 
   { Messages d'erreur (numÇros identiques Ö ceux du GW-BASIC) }
  ErrMsg:Array[1..76]of String[38]=(
@@ -101,6 +101,22 @@ Const
   'Disque pas pràt','Erreur de support du disque','Fonction avancÇe',
   'Renommage entre disques','Erreur d''accäs chemin/fichier',
   'Chemin introuvable');
+
+ { Messages (constantes typÇes : rangÇes dans le segment de donnÇes) }
+ MsgHelp1:String[68]='GWBASIC : Cette commande permet de lancer l''interprÇteur de GWBASIC.';
+ MsgHelp2:String[66]=' fichier   Ce paramätre permet d''indiquer le nom du fichier BASIC.';
+ MsgLic:String[55]='Licence libre et open source MIT 2021, 2022, 2024, 2026';
+ MsgSeed:String[48]='Germe du gÇnÇrateur alÇatoire (-32768 Ö 32767)? ';
+ MsgClone:String[46]=' - Clone Pascal de corail, MS-DOS-0, GWBASIC-0';
+ MsgRedo:String[28]='?Recommencez depuis le dÇbut';
+ MsgSyntax:String[27]='Syntaxe : GWBASIC [fichier]';
+ MsgAuthor:String[25]='êcrit par Sylvain Maltais';
+ MsgUnprint:String[21]='Erreur non imprimable';
+ MsgDigits:String[16]='0123456789ABCDEF';
+ MsgTitle:String[15]='GW-BASIC Clone ';
+ MsgFree:String[14]=' octets libres';
+ MsgAtLine:String[12]=' Ö la ligne ';
+ MsgBreak:String[10]='Interrompu';
 
   { Raccourcis Alt+lettre (code de balayage 16 Ö 50) vers un mot rÇservÇ }
  AltKey:Array[16..50]of Byte=(
@@ -231,6 +247,11 @@ Var
  VX1,VY1,VX2,VY2,VOX,VOY,VTop,VBot:Integer;
  WX1,WY1,WX2,WY2:Double;
  CommonStr:String;
+ UsrAddr:Array[0..9]of Word;
+ UsrDef:Word;
+ VPKey:Array[0..15]of Word;
+ VPRef:Array[0..15]of TRef;
+ VPN:Byte;
  {$IFDEF FPC}
   VMem:^TVMem;
  {$ENDIF}
@@ -276,6 +297,29 @@ Begin
  S[0]:=Chr(N);
  FillChar(S[1],N,C);
  Rep:=S;
+End;
+
+Procedure Order(Var A,B:Integer);
+Var
+ T:Integer;
+Begin
+ If A>B Then Begin
+  T:=A;
+  A:=B;
+  B:=T;
+ End;
+End;
+
+Function NumBase(L:LongInt;B:Integer):String;
+Var
+ S:String;
+Begin
+ S:='';
+ Repeat
+  S:=MsgDigits[L mod B+1]+S;
+  L:=L div B;
+ Until L=0;
+ NumBase:=S;
 End;
 
 Function LTrim(S:String):String;
@@ -796,7 +840,7 @@ End;
 
 Function ErrText(N:Integer):String;Begin
  If(N>=1)and(N<=76)and(ErrMsg[N]<>'')Then ErrText:=ErrMsg[N]
-                                     Else ErrText:='Erreur non imprimable';
+                                     Else ErrText:=MsgUnprint;
 End;
 
 Procedure ScreenMsg(Const S:String);Begin
@@ -838,6 +882,10 @@ Procedure Fix(X:Double;T:Char);Begin
  If T='!'Then X:=Sng(X);
  VN:=X;
  VT:=T;
+End;
+
+Procedure FixI(I:LongInt);Begin
+ Fix(I,'%');
 End;
 
 Procedure NeedNum;Begin
@@ -1646,6 +1694,146 @@ Begin
  Secs:=H*3600.0+M*60.0+S+S100/100;
 End;
 
+ { VARPTR : clÇ de 16 bits identifiant l'adresse d'une variable }
+Function PtrKey(P:Pointer):Word;Begin
+ {$IFDEF FPC}
+  PtrKey:=Word(PtrUInt(P));
+ {$ELSE}
+  PtrKey:=Word(LongInt(Seg(P^))*16+Ofs(P^));
+ {$ENDIF}
+End;
+
+ { Variable dÇsignÇe dans une chaåne DRAW/PLAY par VARPTR$ ou par nom; }
+Function SubRef(Const S:String;Var I:Integer;Var R:TRef):Boolean;
+Var
+ K:TKey;
+ V:PVar;
+ C:Char;
+ J:Integer;
+Begin
+ SubRef:=False;
+ R.P:=NIL;
+ If(I+2<=Length(S))and(S[I]in[#2,#3,#4,#8])Then Begin
+  Case S[I]of
+   #2:C:='%';
+   #3:C:='$';
+   #4:C:='!';
+   Else C:='#';
+  End;
+  For J:=0 to 15 do If(VPRef[J].P<>NIL)and(VPRef[J].T=C)and
+                      (VPKey[J]=Ord(S[I+1])+Ord(S[I+2])*256)Then Begin
+   R:=VPRef[J];
+   SubRef:=True;
+  End;
+  Inc(I,3);
+ End
+  Else
+ Begin
+  K:='';
+  While(I<=Length(S))and(UpCase(S[I])in['A'..'Z','0'..'9','.','%','!','#','$'])do Begin
+   K:=K+UpCase(S[I]);
+   Inc(I);
+  End;
+  If(K<>'')and(K[1]in['A'..'Z'])Then Begin
+   If Not(K[Length(K)]in['%','!','#','$'])Then K:=K+DefT[K[1]];
+   V:=FindVar(K);
+   If V<>NIL Then Begin
+    R.T:=K[Length(K)];
+    R.P:=@V^.Value;
+    SubRef:=True;
+   End;
+  End;
+ End;
+ If(I<=Length(S))and(S[I]=';')Then Inc(I);
+End;
+
+Function SubNum(Const S:String;Var I:Integer):Integer;
+Var
+ R:TRef;
+Begin
+ SubNum:=0;
+ If SubRef(S,I,R)and(R.T<>'$')Then Begin
+  LoadRef(R);
+  SubNum:=CInt(VN);
+ End;
+End;
+
+ { USR, STICK, STRIG et EXTERR (services du BIOS et du DOS sous Turbo Pascal) }
+Procedure CallUsr(N:Integer);
+{$IFNDEF FPC}
+ Var
+  D:Double;
+  P:Pointer;
+  SaveDS:Word;
+  T:Byte;
+{$ENDIF}
+Begin
+ {$IFDEF FPC}
+  Err(5);
+ {$ELSE}
+  D:=VN;
+  T:=8;
+  If VT='%'Then Begin
+   T:=2;
+   PInt(@D)^:=CInt(VN);
+  End
+   Else
+  If VT='!'Then T:=4;
+  P:=Ptr(DefSeg,UsrAddr[N]);
+  SaveDS:=DSeg;
+  Asm
+   mov al,T
+   push ss
+   pop es
+   lea bx,D
+   call dword ptr P
+   mov ds,SaveDS
+  End;
+  If T=2 Then FixI(PInt(@D)^)
+         Else Fix(D,VT);
+ {$ENDIF}
+End;
+
+Function DosInfo(T,N:Integer):Integer;
+{$IFNDEF FPC}
+ Const
+  SB:Array[0..3]of Byte=($10,$40,$20,$80);
+ Var
+  Regs:Registers;
+{$ENDIF}
+Begin
+ DosInfo:=0;
+ {$IFNDEF FPC}
+  FillChar(Regs,SizeOf(Regs),0);
+  If T=kEXTERR Then Begin
+   Regs.AH:=$59;
+   MsDos(Regs);
+   Case N of
+    0:DosInfo:=Regs.AX;
+    1:DosInfo:=Regs.BH;
+    2:DosInfo:=Regs.BL;
+    Else DosInfo:=Regs.CH;
+   End;
+  End
+   Else
+  Begin
+   Regs.AH:=$84;
+   Regs.DX:=Ord(T=160);
+   Intr($15,Regs);
+   If Regs.Flags and FCarry=0 Then Begin
+    If T=160 Then Case N of
+     0:DosInfo:=Regs.AX;
+     1:DosInfo:=Regs.BX;
+     2:DosInfo:=Regs.CX;
+     Else DosInfo:=Regs.DX;
+    End
+     Else
+    If Regs.AL and SB[N shr 1]=0 Then DosInfo:=-1;
+   End;
+  End;
+ {$ENDIF}
+End;
+
  { êvaluation des expressions }
 Procedure EvalPrimary;Forward;
 Procedure EvalNeg;Forward;
@@ -1812,12 +2000,12 @@ Begin
   If ErrCode<>0 Then Exit;
   If B=0 Then Begin
    SoftErr(11);
-   If A<0 Then Fix(-32768,'%')
-          Else Fix(32767,'%');
+   If A<0 Then FixI(-32768)
+          Else FixI(32767);
   End
    Else
-  If(IsMod)Then Fix(A mod B,'%')
-           Else Fix(LongInt(A)div B,'%');
+  If(IsMod)Then FixI(A mod B)
+           Else FixI(LongInt(A)div B);
  End;
 End;
 
@@ -1902,7 +2090,7 @@ Begin
            Else Cmp:=4;
   End;
   If ErrCode<>0 Then Exit;
-  Fix(-Ord(Op and Cmp<>0),'%');
+  FixI(-Ord(Op and Cmp<>0));
  End;
 End;
 
@@ -1928,7 +2116,7 @@ Begin
    3:A:=A or B;
    Else A:=A and B;
   End;
-  Fix(A,'%');
+  FixI(A);
  End;
 End;
 
@@ -2044,7 +2232,7 @@ Begin
  If ErrCode=0 Then Begin
   If(VT='$')<>(K[Length(K)]='$')Then Err(13) Else
   If VT<>'$'Then Begin
-   If K[Length(K)]='%'Then Fix(CInt(VN),'%')
+   If K[Length(K)]='%'Then FixI(CInt(VN))
                       Else Fix(VN,K[Length(K)]);
   End;
  End;
@@ -2058,18 +2246,19 @@ Var
  L:LongInt;
  C:Char;
  H,M,S,S100:Word;
+ R:TRef;
 Begin
  Case T of
   kFN:CallFn;
   kNOT:Begin
    EvalRel;
    I:=ToInt;
-   If ErrCode=0 Then Fix(Not I,'%');
+   If ErrCode=0 Then FixI(Not I);
   End;
   kERL:Fix(ErrLin,'!');
-  kERR:Fix(ErrNum,'%');
-  kCSRLIN:If(InGraph)Then Fix(GRow+1,'%')
-                     Else Fix(WhereY+VTop-1,'%');
+  kERR:FixI(ErrNum);
+  kCSRLIN:If(InGraph)Then FixI(GRow+1)
+                     Else FixI(WhereY+VTop-1);
   kINKEY:Begin
    PollKey;
    VS:='';
@@ -2089,8 +2278,8 @@ Begin
    N:=EvalI;
    Expect(')');
    If ErrCode=0 Then Case N of
-    0:Fix(MapX(X),'%');
-    1:Fix(MapY(X),'%');
+    0:FixI(MapX(X));
+    1:FixI(MapY(X));
     2:Fix(UnX(Clip(X)),'!');
     3:Fix(UnY(Clip(X)),'!');
     Else Err(5);
@@ -2113,7 +2302,7 @@ Begin
     VT:='$';
    End
     Else
-   Fix(0,'%');
+   FixI(0);
   End;
   kENVIRON:Begin
    If Cur<>'$'Then Begin
@@ -2138,6 +2327,7 @@ Begin
    Inc(CurrPos);
    Expect('(');
    N:=EvalB;
+   If(ErrCode=0)and(N=0)Then Err(5);
    K:=0;
    If Accept(',')Then Begin
     Accept('#');
@@ -2204,7 +2394,7 @@ Begin
       If I>0 Then Inc(I,N-1);
      End;
     End;
-    Fix(I,'%');
+    FixI(I);
    End;
    SSP:=K;
   End;
@@ -2250,15 +2440,15 @@ Begin
     If ErrCode<>0 Then Exit;
     I:=SXp(MapX(X));
     N:=SYp(MapY(Y));
-    If(I<0)or(N<0)or(I>GetMaxX)or(N>GetMaxY)Then Fix(-1,'%')
-                                            Else Fix(LogColor(GetPixel(I,N)),'%');
+    If(I<0)or(N<0)or(I>GetMaxX)or(N>GetMaxY)Then FixI(-1)
+                                            Else FixI(LogColor(GetPixel(I,N)));
    End
     Else
    Begin
     Expect(')');
     If ErrCode=0 Then Case RoundI(X)of
-     0:Fix(GLX,'%');
-     1:Fix(GLY,'%');
+     0:FixI(GLX);
+     1:FixI(GLY);
      2:Fix(UnX(GLX),'!');
      3:Fix(UnY(GLY),'!');
      Else Err(5);
@@ -2278,19 +2468,81 @@ Begin
     Else
    Begin
     {$IFDEF FPC}
-     If I<>0 Then Fix(7,'%')
-             Else Fix(32,'%');
+     If I<>0 Then FixI(7)
+             Else FixI(32);
     {$ELSE}
-     Fix(Mem[$B800:((N-1)*ScrW+K-1)*2+Ord(I<>0)],'%');
+     FixI(Mem[$B800:((N-1)*ScrW+K-1)*2+Ord(I<>0)]);
     {$ENDIF}
    End;
   End;
-  kVARPTR,kUSR,kIOCTL:Err(73);
-  kPLAY,159..161:Begin
+  kVARPTR:Begin
+   I:=Ord(Cur='$');
+   Inc(CurrPos,I);
+   Expect('(');
+   If(I=0)and Accept('#')Then Begin
+    N:=CheckFile(EvalI,' ');
+    Expect(')');
+    If ErrCode=0 Then Fix(PtrKey(@FT[N]),'!');
+    Exit;
+   End;
+   GetVarRef(R);
+   Expect(')');
+   If ErrCode<>0 Then Exit;
+   H:=PtrKey(R.P);
+   If I=0 Then Fix(H,'!')
+    Else
+   Begin
+    VPKey[VPN]:=H;
+    VPRef[VPN]:=R;
+    VPN:=(VPN+1)and 15;
+    Case R.T of
+     '%':C:=#2;
+     '$':C:=#3;
+     '!':C:=#4;
+     Else C:=#8;
+    End;
+    VS:=C+Chr(Lo(H))+Chr(Hi(H));
+    VT:='$';
+   End;
+  End;
+  kUSR:Begin
+   N:=0;
+   If Cur in['0'..'9']Then Begin
+    N:=Ord(Cur)-48;
+    Inc(CurrPos);
+   End;
    Expect('(');
    Eval;
    Expect(')');
-   Fix(0,'%');
+   If ErrCode<>0 Then Exit;
+   If(UsrDef and(1 shl N)=0)or(VT='$')Then Err(5)
+                                      Else CallUsr(N);
+  End;
+  kIOCTL:Begin
+   If Cur='$'Then Inc(CurrPos);
+   Expect('(');
+   Accept('#');
+   CheckFile(EvalI,' ');
+   Expect(')');
+   Err(5);
+  End;
+  kLTRIM..kTRIM:Begin
+   Expect('(');
+   EvalS;
+   Expect(')');
+   If ErrCode=0 Then Begin
+    If T<>kLTRIM+1 Then VS:=LTrim(VS);
+    If T<>kLTRIM Then VS:=RTrim(VS);
+   End;
+  End;
+  kPLAY,159..161,kEXTERR:Begin
+   Expect('(');
+   N:=EvalI;
+   Expect(')');
+   If ErrCode<>0 Then Exit;
+   If(N<0)or((T=160)and(N>3))or((T=161)and(N>7))or((T=kEXTERR)and(N>3))Then Err(5) Else
+   If T in[160,161,kEXTERR]Then FixI(DosInfo(T,N))
+                           Else FixI(0);
   End;
   131..134,136..158,162..164,205..210:Begin
    Expect('(');
@@ -2311,9 +2563,9 @@ Begin
    End;
    X:=VN;
    Case T of
-    131:If X>0 Then Fix(1,'%') Else
-        If X<0 Then Fix(-1,'%')
-               Else Fix(0,'%');
+    131:If X>0 Then FixI(1) Else
+        If X<0 Then FixI(-1)
+               Else FixI(0);
     132:Begin { INT }
      Y:=Int(X);
      If Y>X Then Y:=Y-1;
@@ -2338,14 +2590,14 @@ Begin
     kFRE:{$IFDEF FPC}Fix(60000,'!');{$ELSE}Fix(MemAvail,'!');{$ENDIF}
     143:Begin
      {$IFDEF FPC}
-      Fix(255,'%');
+      FixI(255);
      {$ELSE}
-      Fix(Port[Word(RoundI(X))],'%');
+      FixI(Port[Word(RoundI(X))]);
      {$ENDIF}
     End;
-    144:If(InGraph)Then Fix(GCol+1,'%')
-                   Else Fix(WhereX,'%');
-    kLEN:Fix(Length(VS),'%');
+    144:If(InGraph)Then FixI(GCol+1)
+                   Else FixI(WhereX);
+    kLEN:FixI(Length(VS));
     146:Begin
      VS:=NumToStr(X,VT);
      VT:='$';
@@ -2356,13 +2608,13 @@ Begin
                               Else Fix(0,'!');
     End;
     148:If VS=''Then Err(5)
-                Else Fix(Ord(VS[1]),'%');
+                Else FixI(Ord(VS[1]));
     149:Begin
      N:=ToByte;
      VS:=Chr(N);
      VT:='$';
     End;
-    150:Fix(PeekB(DefSeg,Word(RoundI(X))),'%');
+    150:FixI(PeekB(DefSeg,Word(RoundI(X))));
     151:Begin
      VS:=Rep(' ',ToByte);
      VT:='$';
@@ -2371,26 +2623,21 @@ Begin
      L:=RoundI(X);
      If(L<-32768)or(L>65535)Then Err(6);
      If L<0 Then Inc(L,65536);
-     If T=kHEX Then N:=16
-               Else N:=8;
-     VS:='';
-     Repeat
-      VS:=Copy('0123456789ABCDEF',L mod N+1,1)+VS;
-      L:=L div N;
-     Until L=0;
+     If T=kHEX Then VS:=NumBase(L,16)
+               Else VS:=NumBase(L,8);
      VT:='$';
     End;
-    154:Fix(LPCol+1,'%');
-    155:Fix(CInt(X),'%');
+    154:FixI(LPCol+1);
+    155:FixI(CInt(X));
     156:Fix(X,'!');
     157:Fix(X,'#');
     158:Fix(Int(X),VT);
     162:Begin { EOF }
      N:=CheckFile(ToInt,' ');
      If ErrCode=0 Then Begin
-      If FMode[N]='I'Then Fix(-Ord(FEof(N)),'%') Else
-      If FMode[N]='R'Then Fix(-Ord(FREof[N]),'%')
-                     Else Fix(0,'%');
+      If FMode[N]='I'Then FixI(-Ord(FEof(N))) Else
+      If FMode[N]='R'Then FixI(-Ord(FREof[N]))
+                     Else FixI(0);
      End;
     End;
     163,164:Begin
@@ -2402,7 +2649,7 @@ Begin
      End;
     End;
     205:If Length(VS)<2 Then Err(5)
-                        Else Fix(Integer(Word(Ord(VS[1])+Ord(VS[2])*256)),'%');
+                        Else FixI(Integer(Word(Ord(VS[1])+Ord(VS[2])*256)));
     206:If Length(VS)<4 Then Err(5)
                         Else Fix(MBFToNum(VS,3),'!');
     207:If Length(VS)<8 Then Err(5)
@@ -2487,14 +2734,14 @@ End;
 
 Procedure DoBreak(P:Integer);Begin
  If CurrLinePtr>0 Then Begin
-  ScreenMsg('Interrompu Ö la ligne '+IntToStr(PA[CurrLinePtr]^.Num));
+  ScreenMsg(MsgBreak+MsgAtLine+IntToStr(PA[CurrLinePtr]^.Num));
   ContOk:=True;
   ContPtr:=CurrLinePtr;
   ContPos:=P;
   ContJump:=True;
  End
   Else
- ScreenMsg('Interrompu');
+ ScreenMsg(MsgBreak);
  StopExec:=True;
 End;
 
@@ -2633,22 +2880,12 @@ Begin
   S:=S+Z2(Abs(E));
  End;
  If Fl and 2<>0 Then S:='$'+S;
- If Fl and 1<>0 Then Begin
-  If(Neg)Then S:='-'+S
-         Else S:='+'+S;
- End
-  Else
- If Fl and 32<>0 Then Begin
-  If(Neg)Then S:=S+'-'
-         Else S:=S+'+';
- End
-  Else
- If Fl and 64<>0 Then Begin
-  If(Neg)Then S:=S+'-'
-         Else S:=S+' ';
- End
-  Else
- If(Neg)Then S:='-'+S;
+ D:='';
+ If(Neg)Then D:='-' Else
+ If Fl and 33<>0 Then D:='+' Else
+ If Fl and 64<>0 Then D:=' ';
+ If Fl and 96<>0 Then S:=S+D
+                 Else S:=D+S;
  If Length(S)>W Then S:='%'+S Else
  If Fl and 4<>0 Then S:=Rep('*',W-Length(S))+S
                 Else S:=Rep(' ',W-Length(S))+S;
@@ -3083,7 +3320,7 @@ Begin
    If Not(Ok)Then Break;
   End;
   If(Ok)or(ErrCode<>0)Then Exit;
-  OutS('?Recommencez depuis le dÇbut');
+  OutS(MsgRedo);
   OutLn;
  Until False;
 End;
@@ -3855,7 +4092,16 @@ Begin
   SkipStmt;
  End
   Else
- If AcceptTok(kUSR)Then SkipStmt
+ If AcceptTok(kUSR)Then Begin
+  K:='0';
+  If Cur in['0'..'9']Then Begin
+   K:=Cur;
+   Inc(CurrPos);
+  End;
+  Expect('=');
+  UsrAddr[Ord(K[1])-48]:=Word(RoundI(EvalN));
+  If ErrCode=0 Then UsrDef:=UsrDef or(1 shl(Ord(K[1])-48));
+ End
   Else
  Begin
   If ReadWord<>'SEG'Then Begin
@@ -4338,6 +4584,15 @@ Procedure FreeLines;Begin
  While NumberLine>0 do RemoveLine(NumberLine);
 End;
 
+Procedure ResetRun;Begin
+ ForSP:=0;
+ GosubSP:=0;
+ WhileSP:=0;
+ DataPtr:=1;
+ DataPos:=1;
+ DataIn:=False;
+End;
+
 Procedure ClearAll;
 Var
  C:Char;
@@ -4345,12 +4600,7 @@ Begin
  ClearVars;
  For C:='A'to'Z'do DefT[C]:='!';
  OptBase:=0;
- ForSP:=0;
- GosubSP:=0;
- WhileSP:=0;
- DataPtr:=1;
- DataPos:=1;
- DataIn:=False;
+ ResetRun;
  RndX:=$4FC752;
  OnErrLine:=0;
  InHandler:=False;
@@ -4444,24 +4694,8 @@ Begin
    End
     Else
    Case B of
-    $0B,$0C:Begin
-     W:=RW;
-     If B=$0B Then Begin
-      S:=S+'&O';
-      B2:=8;
-     End
-      Else
-     Begin
-      S:=S+'&H';
-      B2:=16;
-     End;
-     Buf:='';
-     Repeat
-      Buf:=Copy('0123456789ABCDEF',W mod B2+1,1)+Buf;
-      W:=W div B2;
-     Until W=0;
-     S:=S+Buf;
-    End;
+    $0B:S:=S+'&O'+NumBase(RW,8);
+    $0C:S:=S+'&H'+NumBase(RW,16);
     $0D,$0E:S:=S+IntToStr(RW);
     $0F:S:=S+IntToStr(RB);
     $11..$1B:S:=S+IntToStr(B-$11);
@@ -4731,7 +4965,7 @@ Begin
       End;
      End
       Else
-     ScreenMsg('Ligne '+IntToStr(N)+' indÇfinie Ö la ligne '+IntToStr(PA[I]^.Num));
+     ScreenMsg('Ligne '+IntToStr(N)+' indÇfinie'+MsgAtLine+IntToStr(PA[I]^.Num));
      While(P<=Length(S))and(S[P]=' ')do Inc(P);
      If(P>Length(S))or(S[P]<>',')Then Break;
      Inc(P);
@@ -4789,7 +5023,7 @@ Begin
  {$IFDEF FPC}FindClose(Info);{$ENDIF}
  If OutCol>0 Then OutLn;
  Str(DiskFree(0),N);
- OutS(N+' octets libres');
+ OutS(N+MsgFree);
  OutLn;
 End;
 
@@ -4919,7 +5153,7 @@ Begin
  If(EndOfStmt)Then Begin
   Repeat
    OutF:=0;
-   OutS('Germe du gÇnÇrateur alÇatoire (-32768 Ö 32767)? ');
+   OutS(MsgSeed);
    S:='';
    If Not EditLine(S)Then Begin
     OutLn;
@@ -5131,20 +5365,25 @@ Begin
                                                  Else Tone(Trunc(F),Trunc(D*1000/18.2));
 End;
 
-Procedure DoPlay;
+Procedure PlayStr(Const S:String;Depth:Integer);
 Const
  NoteOfs:Array['A'..'G']of Byte=(9,11,0,2,4,5,7);
 Var
- S:String;
  I,N,L:Integer;
  C:Char;
  D:Double;
+ R:TRef;
 
  Function Num(Def:Integer):Integer;
  Var
   V:Integer;
  Begin
   While(I<=Length(S))and(S[I]=' ')do Inc(I);
+  If(I<=Length(S))and(S[I]='=')Then Begin
+   Inc(I);
+   Num:=SubNum(S,I);
+  End
+   Else
   If(I<=Length(S))and(S[I]in['0'..'9'])Then Begin
    V:=0;
    While(I<=Length(S))and(S[I]in['0'..'9'])do Begin
@@ -5158,12 +5397,10 @@ Var
  End;
 
 Begin
- EvalS;
- If ErrCode<>0 Then Exit;
- S:=StrToUpper(VS);
+ If Depth>8 Then Err(7);
  I:=1;
  While(I<=Length(S))and(ErrCode=0)do Begin
-  C:=S[I];
+  C:=UpCase(S[I]);
   Inc(I);
   N:=-2;
   Case C of
@@ -5189,8 +5426,9 @@ Begin
    '<':If POct>0 Then Dec(POct);
    'L':PLen:=Num(4);
    'T':PTempo:=Num(120);
+   'X':If SubRef(S,I,R)and(R.T='$')and(PStrPtr(R.P)^<>NIL)Then PlayStr(PStrPtr(R.P)^^,Depth+1);
    'M':If I<=Length(S)Then Begin
-    Case S[I]of
+    Case UpCase(S[I])of
      'N':PStyle:=7;
      'L':PStyle:=8;
      'S':PStyle:=6;
@@ -5216,10 +5454,24 @@ Begin
  End;
 End;
 
+Procedure DoPlay;Begin
+ EvalS;
+ PushS(VS);
+ If ErrCode=0 Then PlayStr(SS[SSP],0);
+End;
+
  { Graphiques }
 Function NeedGraph:Boolean;Begin
  NeedGraph:=InGraph;
  If Not(InGraph)Then Err(5);
+End;
+
+Procedure Pair(Var A,B:Double);Begin
+ Expect('(');
+ A:=EvalN;
+ Expect(',');
+ B:=EvalN;
+ Expect(')');
 End;
 
 Procedure ParseXY(Var X,Y:Integer);
@@ -5228,11 +5480,7 @@ Var
  A,B:Double;
 Begin
  Rel:=AcceptTok(kSTEP);
- Expect('(');
- A:=EvalN;
- Expect(',');
- B:=EvalN;
- Expect(')');
+ Pair(A,B);
  If(Rel)Then Begin
   A:=A+UnX(GLX);
   B:=B+UnY(GLY);
@@ -5341,16 +5589,8 @@ Begin
  If B='B'Then Rectangle(SXp(X1),SYp(Y1),SXp(X2),SYp(Y2)) Else
  If B='BF'Then Begin
   SetFillStyle(SolidFill,C);
-  If X1>X2 Then Begin
-   X1:=X1 xor X2;
-   X2:=X1 xor X2;
-   X1:=X1 xor X2;
-  End;
-  If Y1>Y2 Then Begin
-   Y1:=Y1 xor Y2;
-   Y2:=Y1 xor Y2;
-   Y1:=Y1 xor Y2;
-  End;
+  Order(X1,X2);
+  Order(Y1,Y2);
   Bar(SXp(X1),SYp(Y1),SXp(X2+1)-1,SYp(Y2+1)-1);
  End
   Else
@@ -5466,25 +5706,31 @@ Begin
  End;
 End;
 
-Procedure DoDraw;
+Procedure DrawStr(Const S:String;Depth:Integer);
 Const
  DrawScale:Integer=4;
 Var
- S:String;
  I,N,X,Y,DX,DY:Integer;
  C:Char;
  NoDraw,NoMove:Boolean;
+ R:TRef;
 
  Function Num(Def:Integer):Integer;
  Var
   V:Integer;
   Neg:Boolean;
  Begin
+  While(I<=Length(S))and(S[I]=' ')do Inc(I);
   Neg:=False;
   If(I<=Length(S))and(S[I]in['+','-'])Then Begin
    Neg:=S[I]='-';
    Inc(I);
   End;
+  If(I<=Length(S))and(S[I]='=')Then Begin
+   Inc(I);
+   V:=SubNum(S,I);
+  End
+   Else
   If(I<=Length(S))and(S[I]in['0'..'9'])Then Begin
    V:=0;
    While(I<=Length(S))and(S[I]in['0'..'9'])do Begin
@@ -5499,15 +5745,12 @@ Var
  End;
 
 Begin
- If Not(NeedGraph)Then Exit;
- EvalS;
- If ErrCode<>0 Then Exit;
- S:=StrToUpper(VS);
+ If Depth>8 Then Err(7);
  I:=1;
  NoDraw:=False;
  NoMove:=False;
- While I<=Length(S)do Begin
-  C:=S[I];
+ While(I<=Length(S))and(ErrCode=0)do Begin
+  C:=UpCase(S[I]);
   Inc(I);
   DX:=0;
   DY:=0;
@@ -5532,12 +5775,12 @@ Begin
     DX:=-1;
     DY:=-1;
    End;
-   'M':;
    'B':NoDraw:=True;
    'N':NoMove:=True;
    'C':GFore:=GColor(Num(15));
    'S':DrawScale:=Num(4);
    'A':Num(0);
+   'X':If SubRef(S,I,R)and(R.T='$')and(PStrPtr(R.P)^<>NIL)Then DrawStr(PStrPtr(R.P)^^,Depth+1);
   End;
   If C in['U','D','L','R','E','F','G','H','M']Then Begin
    If C='M'Then Begin
@@ -5572,6 +5815,13 @@ Begin
    NoMove:=False;
   End;
  End;
+End;
+
+Procedure DoDraw;Begin
+ If Not(NeedGraph)Then Exit;
+ EvalS;
+ PushS(VS);
+ If ErrCode=0 Then DrawStr(SS[SSP],0);
 End;
 
 Function Bpp:Integer;Begin
@@ -5614,16 +5864,8 @@ Begin
  End
   Else
  Begin
-  If X1>X2 Then Begin
-   X:=X1;
-   X1:=X2;
-   X2:=X;
-  End;
-  If Y1>Y2 Then Begin
-   Y:=Y1;
-   Y1:=Y2;
-   Y2:=Y;
-  End;
+  Order(X1,X2);
+  Order(Y1,Y2);
   W:=X2-X1+1;
   H:=Y2-Y1+1;
  End;
@@ -5708,17 +5950,8 @@ Begin
   If Accept(',')Then B:=EvalI;
  End;
  If ErrCode<>0 Then Exit;
- If X1>X2 Then Begin
-  F:=F;
-  X1:=X1 xor X2;
-  X2:=X1 xor X2;
-  X1:=X1 xor X2;
- End;
- If Y1>Y2 Then Begin
-  Y1:=Y1 xor Y2;
-  Y2:=Y1 xor Y2;
-  Y1:=Y1 xor Y2;
- End;
+ Order(X1,X2);
+ Order(Y1,Y2);
  If(X1<0)or(Y1<0)or(X2>=GW)or(Y2>=GH)Then Begin
   Err(5);
   Exit;
@@ -5754,17 +5987,9 @@ Begin
  WinOn:=False;
  If(EndOfStmt)Then Exit;
  WinScr:=AcceptTok(kSCREEN);
- Expect('(');
- WX1:=EvalN;
- Expect(',');
- WY1:=EvalN;
- Expect(')');
+ Pair(WX1,WY1);
  Expect('-');
- Expect('(');
- WX2:=EvalN;
- Expect(',');
- WY2:=EvalN;
- Expect(')');
+ Pair(WX2,WY2);
  If ErrCode<>0 Then Exit;
  If(WX1=WX2)or(WY1=WY2)Then Begin
   Err(5);
@@ -5879,12 +6104,7 @@ Begin
  SSP:=K;
  If ErrCode<>0 Then Exit;
  FreeFns;
- ForSP:=0;
- GosubSP:=0;
- WhileSP:=0;
- DataPtr:=1;
- DataPos:=1;
- DataIn:=False;
+ ResetRun;
  If NumberLine=0 Then StopExec:=True Else
  If I>=0 Then JumpTo(L)
          Else GotoIdx(1);
@@ -6081,12 +6301,7 @@ Begin
    LoadProgram(VS,False);
    If ErrCode=0 Then Begin
     ClearVars;
-    ForSP:=0;
-    GosubSP:=0;
-    WhileSP:=0;
-    DataPtr:=1;
-    DataPos:=1;
-    DataIn:=False;
+    ResetRun;
     OnErrLine:=0;
     ContOk:=False;
     If(I=1)and(NumberLine>0)Then GotoIdx(1)
@@ -6147,6 +6362,13 @@ Begin
    DoEvSet(EvParse(T,False));
   End;
   kLOCK,kUNLOCK,kLCOPY,kPCOPY:SkipStmt;
+  kIOCTL:Begin
+   Accept('#');
+   CheckFile(EvalI,' ');
+   Expect(',');
+   EvalS;
+   Err(5);
+  End;
   kDATE,kTIME:DoSetDateTime(T);
   kPAINT:DoPaint;
   kCIRCLE:DoCircle;
@@ -6157,7 +6379,7 @@ Begin
   kSHELL:DoShell;
   kTO,kTHEN,kTAB,kSTEP,kUSR,kFN,kSPC,kNOT,kERL,kERR,kSTRING,kUSING,kINSTR,
   kVARPTR,kCSRLIN,kPOINT,kOFF,kINKEY,kAND..kMOD,128,129,131..158,160,162..164,
-  kERDEV,kPMAP,205..215:SynErr;
+  kERDEV,kPMAP,kLTRIM..kTRIM,205..215:SynErr;
   Else Err(73);
  End;
 End;
@@ -6190,7 +6412,7 @@ Begin
   ErrCode:=0;
  End;
  InHandler:=False;
- If L<>65535 Then ScreenMsg(ErrText(E)+' Ö la ligne '+IntToStr(L))
+ If L<>65535 Then ScreenMsg(ErrText(E)+MsgAtLine+IntToStr(L))
              Else ScreenMsg(ErrText(E));
  If(E=2)and(L<>65535)and FindLine(L,StmtPtr)Then Begin
   EditBuf:=IntToStr(L)+' '+Detok(PA[StmtPtr]^.Text);
@@ -6311,8 +6533,8 @@ Procedure HomeMessage;Begin
  ClrScr;
  ShowFunctionKey;
  Window(1,1,ScrW,24);
- WriteLn('GW-BASIC Clone ',Version);
- WriteLn('Licence libre et open source MIT 2021, 2022, 2024, 2026');
+ WriteLn(MsgTitle,Version);
+ WriteLn(MsgLic);
 End;
 
 Var
@@ -6326,18 +6548,18 @@ BEGIN
   {$ENDIF}
  {$ENDIF}
  If(ParamStr(1)='/?')or(ParamStr(1)='--help')or(ParamStr(1)='-h')Then Begin
-  WriteLn('GWBASIC : Cette commande permet de lancer l''interprÇteur de GWBASIC.');
+  WriteLn(MsgHelp1);
   WriteLn;
-  WriteLn('Syntaxe : GWBASIC [fichier]');
+  WriteLn(MsgSyntax);
   WriteLn;
-  WriteLn(' fichier   Ce paramätre permet d''indiquer le nom du fichier BASIC.');
+  WriteLn(MsgHelp2);
  End
   Else
  If ParamStr(1)='--version'Then Begin
-  WriteLn('GWBASIC ',Version,' - Clone Pascal de corail, MS-DOS-0, GWBASIC-0');
+  WriteLn('GWBASIC ',Version,MsgClone);
   WriteLn('Licence MIT');
   WriteLn;
-  WriteLn('êcrit par Sylvain Maltais');
+  WriteLn(MsgAuthor);
  End
   Else
  Begin

@@ -5,6 +5,16 @@ Clone GWBASIC du DOS écrit en Pascal  (Turbo Pascal ou Free Pascal).
 
 <h2>Quoi de neuf</h2>
 
+<h4>Version 0.82</h4>
+<ul>
+  <li>Ajout des fonctions VARPTR (y compris VARPTR(#n)) et VARPTR$.</li>
+  <li>DRAW et PLAY acceptent les sous-chaînes « X »+VARPTR$(a$) et les paramètres « =variable; » ou « = »+VARPTR$(v).</li>
+  <li>Ajout de DEF USR[n] et de la fonction USR[n] (Turbo Pascal seulement).</li>
+  <li>Ajout de EXTERR, STICK et STRIG (services du DOS et du BIOS sous Turbo Pascal) et de IOCTL$.</li>
+  <li>Ajout des fonctions LTRIM$, RTRIM$ et TRIM$ (extensions du clone).</li>
+  <li>INPUT$(0) provoque maintenant « Appel de fonction illégal » comme le GW-BASIC.</li>
+</ul>
+
 <h4>Version 0.81</h4>
 <ul>
   <li>Ajout des fichiers à accès direct : OPEN "R" / FOR RANDOM ... LEN=, FIELD, GET #, PUT #, LSET, RSET, LOC, LOF et EOF.</li>
